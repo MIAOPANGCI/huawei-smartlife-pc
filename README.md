@@ -119,12 +119,22 @@ Windows 桌面端的华为智慧生活控制程序：华为账号登录（含会
 
 **最省事**：双击 `run.bat` —— 自动检查依赖并启动（使用 `py -3` 选定的 Python）。
 
+启动器用 `pythonw`（无控制台解释器）运行，脚本自身**启动后立即退出**，所以不会
+常驻一个黑窗口——以前那个窗口关掉就等于关掉程序。想连一闪而过的窗口都不要，
+双击 `run.vbs`（隐藏窗口启动，依赖没装时会弹提示让你先跑 `run.bat`）。
+
 **手动**：
 
 ```bash
 py -3 -m pip install -r requirements.txt
-py -3 main.py
+py -3 main.py          # 前台运行，日志打到终端
+pyw -3 main.py         # 无控制台窗口运行
 ```
+
+> `pythonw` / `pyw` 没有控制台，`print` 和标准错误都无处可去。所以启动阶段的
+> 错误（比如依赖没装）改成系统弹窗提示，运行期日志照常写入
+> `~/.huawei_smartlife/app.log`。日志初始化时会先试写一次标准错误，
+> 句柄无效就只挂文件 handler，不会因为"没有控制台"把日志整体丢掉。
 
 > 机器上有多个 Python 时，务必让 `pip` 与运行程序的 `python` 是同一个解释器；  
 > 若 `python` 指向的是精简版（`import tkinter` 失败、pip 装不上 PySide6），  
@@ -157,7 +167,8 @@ py -3 main.py
 ```
 HUAWEI-SMARTLIFE-PC/
 ├── main.py                    # 入口（极简，仅做依赖提示）
-├── run.bat                    # 一键启动（自检依赖）
+├── run.bat                    # 一键启动（自检依赖，pythonw 后台运行）
+├── run.vbs                    # 无窗口启动（双击即可）
 ├── requirements.txt
 ├── _smoke_test.py             # 无头自检（106 项）
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图

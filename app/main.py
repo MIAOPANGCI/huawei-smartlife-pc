@@ -26,6 +26,25 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # 日志
 # ---------------------------------------------------------------------------
+def console_stream_available() -> bool:
+    """判断当前进程能不能真的往控制台写。
+
+    用 pythonw（或双击 .vbs）启动时没有控制台，``sys.stderr`` 可能是 ``None``，
+    也可能是个存在的对象但底层句柄无效。两种情况都不能挂 StreamHandler，
+    否则每条日志都会抛一次异常（被 logging 内部吞掉，表现是日志全丢）。
+    所以这里实际试写一次，而不是只判断是否为 None。
+    """
+    stream = sys.stderr
+    if stream is None:
+        return False
+    try:
+        stream.write("")
+        stream.flush()
+    except Exception:  # noqa: BLE001 - 句柄无效 / 流已关闭
+        return False
+    return True
+
+
 def configure_logging() -> None:
     """控制台 + 文件双输出（文件用于排查协议与崩溃问题）。"""
     os.makedirs(APP_DIR, exist_ok=True)
@@ -33,7 +52,10 @@ def configure_logging() -> None:
     root = logging.getLogger()
     root.setLevel(logging.INFO)
 
-    if not any(isinstance(h, logging.StreamHandler) and h.stream is sys.stderr for h in root.handlers):
+    if console_stream_available() and not any(
+        isinstance(h, logging.StreamHandler) and h.stream is sys.stderr
+        for h in root.handlers
+    ):
         console = logging.StreamHandler(sys.stderr)
         console.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
         root.addHandler(console)
@@ -77,7 +99,9 @@ def install_exception_hook() -> None:
 
     def hook(exc_type, exc_value, exc_tb):  # noqa: ANN001 - sys.excepthook 签名
         if issubclass(exc_type, KeyboardInterrupt):
-            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            # pythonw 下 sys.stderr 是 None，默认钩子会自己再抛一次
+            if sys.stderr is not None:
+                sys.__excepthook__(exc_type, exc_value, exc_tb)
             return
         logging.getLogger(__name__).error(
             "未捕获的异常", exc_info=(exc_type, exc_value, exc_tb)
