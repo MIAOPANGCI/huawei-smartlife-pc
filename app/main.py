@@ -1,0 +1,186 @@
+"""应用启动引导：日志、高 DPI、全局异常兜底、主题初始化。
+
+单独抽一个模块，是为了让 ``main.py`` 保持极简，同时给测试留出入口
+（``create_app()`` 可以在无界面环境下构造 QApplication）。
+"""
+
+from __future__ import annotations
+
+import faulthandler
+import logging
+import os
+import sys
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPixmap
+from PySide6.QtWidgets import QApplication, QMessageBox
+
+from . import dispatch
+from .controller import APP_DIR, UI_SETTINGS_PATH
+from .main_window import MainWindow
+from .theme import DEFAULT_ACCENT, set_theme
+
+_LOGGER = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# 日志
+# ---------------------------------------------------------------------------
+def configure_logging() -> None:
+    """控制台 + 文件双输出（文件用于排查协议与崩溃问题）。"""
+    os.makedirs(APP_DIR, exist_ok=True)
+    log_path = os.path.join(APP_DIR, "app.log")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    if not any(isinstance(h, logging.StreamHandler) and h.stream is sys.stderr for h in root.handlers):
+        console = logging.StreamHandler(sys.stderr)
+        console.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        root.addHandler(console)
+
+    try:
+        handler = logging.FileHandler(log_path, encoding="utf-8")
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        root.addHandler(handler)
+    except OSError:
+        _LOGGER.warning("无法写入日志文件：%s", log_path)
+
+    # MQTT 心跳日志比较吵，只保留告警以上
+    logging.getLogger("paho").setLevel(logging.WARNING)
+
+
+_CRASH_HANDLE = None
+
+
+def install_crash_handler() -> None:
+    """把解释器级崩溃（access violation 等）的栈写进 crash.log。
+
+    ``sys.excepthook`` 只能接住 Python 异常；Qt 对象被访问已释放内存这种情况
+    会直接杀掉进程，Windows 只弹一句 "python has stopped working"，
+    什么线索都留不下。faulthandler 是唯一能拿到栈的手段。
+    """
+    global _CRASH_HANDLE
+    try:
+        os.makedirs(APP_DIR, exist_ok=True)
+        _CRASH_HANDLE = open(
+            os.path.join(APP_DIR, "crash.log"), "a", buffering=1, encoding="utf-8"
+        )
+        faulthandler.enable(file=_CRASH_HANDLE, all_threads=True)
+    except (OSError, ValueError) as error:  # noqa: BLE001 - 崩溃记录失败不影响运行
+        _LOGGER.warning("无法启用崩溃日志：%s", error)
+
+
+def install_exception_hook() -> None:
+    """未捕获异常：写日志并弹窗，避免界面「静默死掉」。"""
+
+    def hook(exc_type, exc_value, exc_tb):  # noqa: ANN001 - sys.excepthook 签名
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        logging.getLogger(__name__).error(
+            "未捕获的异常", exc_info=(exc_type, exc_value, exc_tb)
+        )
+        try:
+            QMessageBox.critical(
+                None,
+                "程序出错",
+                f"发生未处理的错误：\n{exc_value}\n\n详细信息已写入日志：\n"
+                f"{os.path.join(APP_DIR, 'app.log')}",
+            )
+        except Exception:  # noqa: BLE001 - 弹窗失败时不要再抛
+            pass
+
+    sys.excepthook = hook
+
+
+# ---------------------------------------------------------------------------
+# 图标
+# ---------------------------------------------------------------------------
+def make_app_icon(accent: str = "#d92b3a") -> QIcon:
+    """用代码画一个应用图标，避免打包图片资源。"""
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    path = QPainterPath()
+    path.addRoundedRect(2, 2, 60, 60, 14, 14)
+    painter.fillPath(path, QColor(accent))
+    painter.setPen(QColor("#ffffff"))
+    font = QFont()
+    font.setPointSize(30)
+    font.setWeight(QFont.Bold)
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), Qt.AlignCenter, "H")
+    painter.end()
+    return QIcon(pixmap)
+
+
+# ---------------------------------------------------------------------------
+# 主题设置读取（在窗口构造前应用，避免先深后浅闪一下）
+# ---------------------------------------------------------------------------
+def load_ui_settings() -> dict:
+    import json
+
+    try:
+        with open(UI_SETTINGS_PATH, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _center_on_screen(window: MainWindow) -> None:
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return
+    available = screen.availableGeometry()
+    window.move(
+        available.x() + max(0, (available.width() - window.width()) // 2),
+        available.y() + max(0, (available.height() - window.height()) // 2),
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """启动 GUI，返回进程退出码。"""
+    configure_logging()
+    install_crash_handler()
+    install_exception_hook()
+
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+
+    app = QApplication(argv if argv is not None else sys.argv)
+    app.setApplicationName("华为智慧生活 PC 控制台")
+    app.setOrganizationName("huawei-smartlife-pc")
+    app.setStyle("Fusion")  # Fusion 对 QSS 的支持最一致
+
+    settings = load_ui_settings()
+    mode = settings.get("mode", "dark")
+    accent = settings.get("accent", DEFAULT_ACCENT)
+    set_theme(mode, accent)
+    app.setWindowIcon(make_app_icon())
+    # 主线程投递器：所有跨线程回调都经它回到主线程（见 app/dispatch.py）
+    dispatch.attach()
+
+    # 延迟导入：确保 set_theme 先于任何控件构造
+    from .controller import AppController
+
+    controller = AppController()
+    window = MainWindow(controller)
+    _center_on_screen(window)
+    window.show()
+
+    exit_code = app.exec()
+
+    # 退出前等待后台任务收敛，避免线程被强杀
+    from .workers import runner
+
+    runner().wait(3000)
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

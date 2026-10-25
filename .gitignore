@@ -1,0 +1,29 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- 本机运行产物（含账号与 Token，绝不能提交）----
+session.json
+ui_settings.json
+*.log
+crash.log
+
+# ---- 开发工具与工作区记录 ----
+.workbuddy/
+.idea/
+.vscode/
+*.swp
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
