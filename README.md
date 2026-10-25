@@ -159,7 +159,8 @@ HUAWEI-SMARTLIFE-PC/
 ├── main.py                    # 入口（极简，仅做依赖提示）
 ├── run.bat                    # 一键启动（自检依赖）
 ├── requirements.txt
-├── _smoke_test.py             # 无头自检（73 项）
+├── _smoke_test.py             # 无头自检（106 项）
+├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
 │   ├── constants.py           # 域名 / App 标识 / REST 路径 / MQTT 参数
 │   ├── exceptions.py          # 异常体系
@@ -196,7 +197,6 @@ HUAWEI-SMARTLIFE-PC/
         ├── icons.py           # 状态点 / 设备轮廓图标
         ├── glyph_icons.py     # 界面图标（自绘）+ 应用/托盘图标
         ├── mini_card.py       # 紧凑设备卡（托盘面板与挂件共用）
-        ├── rounded_surface.py # 抗锯齿圆角面板（托盘浮层 / 挂件外壳）
         ├── rounded_surface.py # 抗锯齿圆角面板（托盘浮层 / 挂件外壳）
         ├── labels.py          # 自动省略的长文本标签
         └── toast.py           # 轻提示
