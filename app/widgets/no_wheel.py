@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QSlider,
-    QWidget,
 )
 
 
