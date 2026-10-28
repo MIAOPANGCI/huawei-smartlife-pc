@@ -38,7 +38,15 @@ SWITCH_SERVICE_IDS: tuple[str, ...] = (
 
 # 附属开关服务：指示灯 / 童锁等，不能当作设备主电源
 NON_POWER_SERVICE_IDS: frozenset[str] = frozenset(
-    {"indicator", "indicatorlight", "childlock", "lock", "screen", "display"}
+    {
+        "indicator",
+        "indicatorlight",
+        "childlock",
+        "childlockswitch",   # 一功能一服务的设备里，童锁是个独立服务
+        "lock",
+        "screen",
+        "display",
+    }
 )
 
 # 只读服务：电量统计 / 诊断 / 固件更新 / 端到端加密状态。
@@ -621,7 +629,46 @@ def device_initial(device: Device) -> str:
 # ---------------------------------------------------------------------------
 # 开关识别
 # ---------------------------------------------------------------------------
-def _is_boolish(key: str, value: object) -> bool:
+# 服务里只放一个通用键的情况：真正的语义在服务名上。
+_GENERIC_DATA_KEYS: frozenset[str] = frozenset(
+    {
+        "on",
+        "off",
+        "switch",
+        "value",
+        "state",
+        "status",
+        "enable",
+        "enabled",
+        "power",
+        "open",
+        "close",
+        "level",
+    }
+)
+
+
+def _semantic_key(sid: str, data: Mapping[str, Any]) -> str | None:
+    """返回代表「这个属性是什么」的键名。
+
+    多数设备是「一个服务多个属性」（sid=heater, data={targetTemp, currentTemp}），
+    此时每个 data 键本身就有语义。
+
+    但也有设备把每个功能拆成独立服务，服务里只放一个通用键：
+    ``sid=ctlCapability, data={"on": 1}``、``sid=timer, data={"on": 0}``。
+    这时候如果还按 ``on`` 判断，能力标志、定时、电量全会被当成开关——
+    实际表现就是一屏的开关，和官方 App 完全对不上。
+    """
+    real = [k for k in data if str(k).lower() not in _RANGE_META_KEYS]
+    if len(real) != 1:
+        return None
+    only = str(real[0]).strip().lower()
+    if only not in _GENERIC_DATA_KEYS:
+        return None
+    return sid.strip().lower() or None
+
+
+def _is_boolish(key: str, value: object, semantic: str | None = None) -> bool:
     if isinstance(value, bool):
         return True
     if not isinstance(value, int) or isinstance(value, bool):
@@ -630,7 +677,18 @@ def _is_boolish(key: str, value: object) -> bool:
     # 开关渲染出来，用户看到的开关状态还是「未知」，点一下还可能把功率写回去。
     if value not in (0, 1):
         return False
-    return str(key).lower() in {k.lower() for k in SWITCH_KEYS}
+
+    # 语义键（服务名）已经说明它是时长/标志位/统计量时，不能当开关
+    if semantic:
+        if (
+            semantic in READONLY_FLAG_KEYS
+            or semantic in DURATION_KEYS
+            or semantic in READONLY_NUMERIC_KEYS
+        ):
+            return False
+
+    names = {k.lower() for k in SWITCH_KEYS}
+    return key.lower() in names or (semantic is not None and semantic in names)
 
 
 def switch_state_of(value: object) -> str:
@@ -653,6 +711,11 @@ def find_switch_service(device: Device) -> tuple[str, str, object] | None:
         for svc in device.services.values()
         if svc.sid.lower() not in NON_POWER_SERVICE_IDS
         and svc.sid.lower() not in READONLY_SERVICE_IDS
+        # 一功能一服务的设备里每个服务都有个 on，不排除这些的话
+        # 会按字典顺序抓到「控制能力」「定时」当主电源
+        and svc.sid.lower() not in READONLY_FLAG_KEYS
+        and svc.sid.lower() not in DURATION_KEYS
+        and svc.sid.lower() not in READONLY_NUMERIC_KEYS
     ]
 
     # 第一轮：服务 ID 命中主电源命名（无数据也接受，状态记为 unknown 仍可点）
@@ -793,31 +856,38 @@ def build_service_specs(device: Device) -> list[ServiceSpec]:
 
 def _build_service_spec(svc: ServiceState) -> ServiceSpec:
     sid = svc.sid
-    readonly = sid.lower() in READONLY_SERVICE_IDS
-    spec = ServiceSpec(sid=sid, label=humanize_key(sid, kind="sid"), readonly=readonly)
+    sid_low = sid.lower()
     data = dict(svc.data or {})
+    # 「一功能一服务」时语义在 sid 上（sid=timer, data={"on":0}）
+    semantic = _semantic_key(sid, data)
+    readonly = (
+        sid_low in READONLY_SERVICE_IDS or sid_low in READONLY_FLAG_KEYS
+    )
+    spec = ServiceSpec(sid=sid, label=humanize_key(sid, kind="sid"), readonly=readonly)
 
     for key, value in data.items():
         kl = str(key).lower()
         if kl in _RANGE_META_KEYS:
             continue  # 范围元数据不单独展示
+        # 判断类型一律看语义键：data 里可能只有个 on
+        sem = semantic or kl
         label = humanize_key(key)
 
         if readonly:
             spec.properties.append(_readonly_spec(sid, key, label, value))
             continue
 
-        if _is_boolish(key, value):
+        if _is_boolish(key, value, semantic):
             spec.properties.append(
                 PropertySpec(sid, key, label, KIND_TOGGLE, bool(value))
             )
         elif isinstance(value, (int, float)) and not isinstance(value, bool):
-            enum_like = kl in ENUM_LIKE_KEYS and not _has_range_meta(data)
-            if enum_like or slider_unsuitable(key, float(value), data):
+            enum_like = sem in ENUM_LIKE_KEYS and not _has_range_meta(data)
+            if enum_like or slider_unsuitable(sem, float(value), data):
                 spec.properties.append(
                     PropertySpec(sid, key, label, KIND_READONLY_NUMBER, value)
                 )
-            elif kl in DURATION_KEYS:
+            elif sem in DURATION_KEYS:
                 # 时长类（定时 / 倒计时 / 延时）：范围通常几百到几万，
                 # 滑块既拖不准也没法表示具体分钟数，给个输入框回车下发。
                 spec.properties.append(PropertySpec(sid, key, label, KIND_TEXT, value))
@@ -825,7 +895,7 @@ def _build_service_spec(svc: ServiceState) -> ServiceSpec:
                 # 0/1 且没给范围：这是开关或标志位，不是"可调数值"。
                 # 用滑块表示 0/1 毫无意义（拖一格就跨完整个取值范围），
                 # 实际界面上就是一排长得一模一样的小红点，还特别容易误触。
-                if kl in READONLY_FLAG_KEYS:
+                if sem in READONLY_FLAG_KEYS:
                     spec.properties.append(
                         PropertySpec(sid, key, label, KIND_READONLY_NUMBER, value)
                     )

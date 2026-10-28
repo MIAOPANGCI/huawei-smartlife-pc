@@ -630,7 +630,13 @@ class DeviceDialog(QDialog):
             )
             holder_layout.addWidget(edit)
 
-            unit_text = unit_of(prop.key) or self._duration_unit(prop.key)
+            # 一功能一服务的设备里 data 只有一个 on，单位要看服务名
+            unit_text = (
+                unit_of(prop.key)
+                or unit_of(prop.sid)
+                or self._duration_unit(prop.key)
+                or self._duration_unit(prop.sid)
+            )
             if unit_text:
                 unit_label = QLabel(unit_text)
                 unit_label.setObjectName("Caption")
@@ -648,7 +654,7 @@ class DeviceDialog(QDialog):
             layout.addWidget(widget, 1)
         else:  # 只读文本 / 数值
             text = (
-                f"{format_number(prop.value)}{unit_of(prop.key)}"
+                f"{format_number(prop.value)}{unit_of(prop.key) or unit_of(prop.sid)}"
                 if prop.kind == KIND_READONLY_NUMBER
                 else translate_value(prop.value)
             )
@@ -754,7 +760,7 @@ class DeviceDialog(QDialog):
         else:
             text = f"{value:.2f}".rstrip("0").rstrip(".")
         # 只写「45」看不出是度还是档位，带上单位
-        return f"{text}{unit_of(prop.key)}"
+        return f"{text}{unit_of(prop.key) or unit_of(prop.sid)}"
 
     def _update_values(self, specs: list[ServiceSpec]) -> None:
         """结构未变时，仅同步控件值（不重建，避免打断拖动）。"""

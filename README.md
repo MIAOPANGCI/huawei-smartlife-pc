@@ -188,7 +188,7 @@ HUAWEI-SMARTLIFE-PC/
 ├── run.bat                    # 一键启动（自检依赖，pythonw 后台运行）
 ├── run.vbs                    # 无窗口启动（双击即可）
 ├── requirements.txt
-├── _smoke_test.py             # 无头自检（182 项）
+├── _smoke_test.py             # 无头自检（191 项）
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
 │   ├── constants.py           # 域名 / App 标识 / REST 路径 / MQTT 参数
@@ -301,6 +301,14 @@ python _smoke_test.py     # 无需显示环境、不联网
   与运行日志的遥测摘要共用一份；没有对应单位的字段不瞎加。
 - `power` 这个键尤其要看值：`power: 1` 是电源开关，`power: 1717` 是实时功率（W）。
   只看键名会把功率渲染成一个「未知状态」的开关，点一下还可能把 1717 写回去。
+- **两种数据结构都要认**：多数设备是「一个服务多个属性」
+  （`sid=heater, data={targetTemp, currentTemp}`），但也有的把每个功能拆成
+  独立服务、里面只放一个通用键（`sid=ctlCapability, data={"on": 1}`、
+  `sid=timer, data={"on": 0}`）。后者如果只按 `on` 判断，能力标志、定时、电量
+  会全部变成开关——实际界面就是一整屏开关，跟官方 App 完全对不上。
+  `_semantic_key()` 负责在这种情况把服务名当作字段语义。
+- 找主电源时同样要排除这些服务，否则按字典顺序会抓到「控制能力」或「定时」
+  当主开关，头部那个「电源」其实是童锁。
 
 这些规则集中在 `app/device_spec.py`，改协议适配只需动一个文件。
 

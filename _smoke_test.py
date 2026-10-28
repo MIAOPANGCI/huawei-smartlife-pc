@@ -965,6 +965,59 @@ def main() -> int:
     check("延迟有分钟单位", DeviceDialog._duration_unit("delay") == "分钟")
     check("非时长字段不乱标单位", DeviceDialog._duration_unit("brightness") == "")
 
+    # ---- 31. 「一功能一服务」结构：data 里只有一个 on ----
+    # 这类设备把每个功能拆成独立服务，语义全在 sid 上。之前只按 key 判断，
+    # 结果控制能力、定时、电量全被渲染成开关（用户截图里一整屏开关）。
+    split = Device(
+        home_id="h1",
+        dev_id="dev-split",
+        name="热水器",
+        online=True,
+        services={
+            "childLockSwitch": ServiceState(sid="childLockSwitch", data={"on": 0}),
+            "ctlCapability": ServiceState(sid="ctlCapability", data={"on": 1}),
+            "delay": ServiceState(sid="delay", data={"on": 0}),
+            "electric": ServiceState(sid="electric", data={"on": 0}),
+            "indicator": ServiceState(sid="indicator", data={"on": 1}),
+            "kitAuth": ServiceState(sid="kitAuth", data={"on": 1}),
+            "timer": ServiceState(sid="timer", data={"on": 0}),
+            "powerSwitch": ServiceState(sid="powerSwitch", data={"on": 1}),
+        },
+    )
+    split_kinds = {
+        spec.sid: prop.kind
+        for spec in device_spec.build_service_specs(split)
+        for prop in spec.properties
+    }
+    check("童锁仍是开关", split_kinds.get("childLockSwitch") == "toggle")
+    check("指示灯仍是开关", split_kinds.get("indicator") == "toggle")
+    check("控制能力不是开关", split_kinds.get("ctlCapability") == "readonly_number")
+    check("配网鉴权不是开关", split_kinds.get("kitAuth") == "readonly_number")
+    check("电量不是开关", split_kinds.get("electric") == "readonly_number")
+    check("延迟是输入框", split_kinds.get("delay") == "text")
+    check("定时是输入框", split_kinds.get("timer") == "text")
+
+    # 童锁不能被当成主电源（否则头部显示"电源"其实是童锁）
+    found_switch = device_spec.find_switch_service(split)
+    check("主开关是真正的电源", found_switch is not None and found_switch[0] == "powerSwitch")
+
+    # 有 on 键但没有电源类服务时，不应该硬抓一个当主开关
+    no_power = Device(
+        home_id="h1",
+        dev_id="dev-nopower",
+        name="热水器",
+        online=True,
+        services={
+            "childLockSwitch": ServiceState(sid="childLockSwitch", data={"on": 0}),
+            "timer": ServiceState(sid="timer", data={"on": 0}),
+            "electric": ServiceState(sid="electric", data={"on": 0}),
+        },
+    )
+    check(
+        "没有电源服务时不乱认主开关",
+        device_spec.find_switch_service(no_power) is None,
+    )
+
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")
     return 0
