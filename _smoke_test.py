@@ -695,6 +695,56 @@ def main() -> int:
     # 未连接实时通道时切换不应触发重连（否则会打网络请求）
     check("未连接时不触发重连", ctrl._mqtt_connected is False)
 
+    # ---- 26. 字段名与枚举值的中文翻译 ----
+    from app.device_spec import humanize_key, translate_value  # noqa: E402
+
+    check("枚举值翻译成中文", translate_value("idle") == "待机")
+    check("大写枚举值也能翻", translate_value("RUNNING") == "运行中")
+    check("未知值原样返回（不改设备名）", translate_value("HUAWEI") == "HUAWEI")
+    check("中文值不受影响", translate_value("客厅灯") == "客厅灯")
+    check("空值显示破折号", translate_value("") == "—")
+    check("带序号的字段名保留数字", humanize_key("visitPoint6") == "访客点6")
+    check("驼峰字段名逐词翻译", humanize_key("targetTemp") == "目标温度")
+    check("整词优先于拆分", humanize_key("powerElectricity") == "电量统计")
+    check(
+        "未收录字段退化成英文而不是丢字符",
+        humanize_key("fooBar") == "Foo Bar",
+    )
+
+    # ---- 27. 设备详情默认只留可操作项 ----
+    from app.dialogs.device_dialog import DeviceDialog  # noqa: E402
+
+    socket = controller.store.get("dev-socket")
+    dialog = DeviceDialog(socket, window)
+    check("详情窗默认不显示高级信息", dialog.show_advanced() is False)
+    check("命令下发面板默认隐藏", dialog._command_panel.isHidden())
+    default_sids = {prop.sid for prop, _row in dialog._rows}
+    # 插座的开关已经由头部的三态电源开关承担，服务块里不再重复
+    check("默认隐藏只读服务（电量统计）", "powerElectricity" not in default_sids)
+    check(
+        "过滤后为空时给出提示，而不是一片白",
+        dialog._empty_hint is not None and "高级信息" in dialog._empty_hint.text(),
+    )
+
+    dialog._advanced_box.setChecked(True)
+    app.processEvents()
+    check("勾选后状态同步", dialog.show_advanced() is True)
+    check("勾选后命令面板出现", not dialog._command_panel.isHidden())
+    advanced_sids = {prop.sid for prop, _row in dialog._rows}
+    check("勾选后显示只读服务", "powerElectricity" in advanced_sids)
+
+    dialog._advanced_box.setChecked(False)
+    app.processEvents()
+    check("取消勾选后重新收起", dialog._command_panel.isHidden())
+    dialog.close()
+
+    # 电量这类日常指标即使在只读服务里也要保留
+    watch = controller.store.get("dev-watch")
+    watch_dialog = DeviceDialog(watch, window)
+    watch_keys = {prop.key for prop, _row in watch_dialog._rows}
+    check("电量属于日常指标，默认保留", "battery" in watch_keys)
+    watch_dialog.close()
+
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")
     return 0

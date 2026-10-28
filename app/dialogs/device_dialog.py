@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import json
 
-from PySide6.QtCore import QPoint, QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
@@ -48,9 +49,33 @@ from ..device_spec import (
     PropertySpec,
     ServiceSpec,
     format_number,
+    translate_value,
 )
 from ..theme import theme
 from ..widgets.controls import SwitchButton
+
+# 用户能直接操作的控件类型。默认视图只保留这些，
+# 加上下面白名单里的少数只读指标。
+_ACTIONABLE_KINDS = (KIND_TOGGLE, KIND_SLIDER, KIND_TEXT)
+
+# 日常关心的指标：高级信息关着时也显示。
+# 档位/风速这类字段在缺少 min/max 元数据时会被推断成"只读枚举"，
+# 但它们本身是用户想调的（净化器风速、风扇档位），不能一起收起来。
+_DAILY_METRIC_KEYS = frozenset(
+    {
+        "temperature",
+        "ambienttemp",
+        "humidity",
+        "battery",
+        "pm25",
+        "brightness",
+        "speed",
+        "fanspeed",
+        "windspeed",
+        "level",
+        "gear",
+    }
+)
 from ..widgets.icons import DeviceAvatar, StatusDot
 from ..widgets.glyph_icons import make_icon
 
@@ -60,14 +85,25 @@ class DeviceDialog(QDialog):
 
     command_requested = Signal(str, str, dict, dict)  # dev_id, sid, data, overrides
     refresh_requested = Signal(str)
+    advanced_changed = Signal(bool)
 
-    def __init__(self, device: Device, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        device: Device,
+        parent: QWidget | None = None,
+        show_advanced: bool = False,
+    ) -> None:
         super().__init__(parent)
         self._device = device
+        # 「显示高级信息」：默认关。关着的时候只留用户能动手操作的控件，
+        # 以及温度/电量这类日常指标；只读服务（电量统计、网络信息、故障检测）
+        # 和通用命令下发属于排查工具，收到这个开关后面。
+        self._show_advanced = bool(show_advanced)
         self._rows: list[tuple[PropertySpec, QWidget]] = []
         self._structure: list[tuple[str, str, str]] = []
         self._drag_offset: QPoint | None = None
         self._suppress = False
+        self._empty_hint: QLabel | None = None
 
         self.setWindowTitle(f"设备 · {device.name}")
         self.setWindowFlags(
@@ -77,6 +113,7 @@ class DeviceDialog(QDialog):
         self.resize(560, 520)
         self._build()
         self.reload(device)
+        self._fit_to_content()
 
     # ==================================================================
     # 构建
@@ -99,7 +136,8 @@ class DeviceDialog(QDialog):
         layout.setSpacing(0)
 
         layout.addWidget(self._build_titlebar())
-        layout.addWidget(self._build_header())
+        self._header = self._build_header()
+        layout.addWidget(self._header)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -112,8 +150,11 @@ class DeviceDialog(QDialog):
         self._scroll.setWidget(content)
         layout.addWidget(self._scroll, 1)
 
-        layout.addWidget(self._build_command_panel())
-        layout.addWidget(self._build_footer())
+        self._command_panel = self._build_command_panel()
+        layout.addWidget(self._command_panel)
+        self._footer = self._build_footer()
+        layout.addWidget(self._footer)
+        self._apply_advanced()
 
     # ---------- 标题栏 ----------
     def _build_titlebar(self) -> QWidget:
@@ -224,7 +265,7 @@ class DeviceDialog(QDialog):
             "QToolButton { border: none; color: %s; font-size: 12px; }"
             % theme().palette.text_2
         )
-        self._advanced_toggle.toggled.connect(self._on_advanced_toggled)
+        self._advanced_toggle.toggled.connect(self._on_command_panel_toggled)
         outer.addWidget(self._advanced_toggle)
 
         self._advanced_body = QWidget()
@@ -273,6 +314,54 @@ class DeviceDialog(QDialog):
         outer.addWidget(self._advanced_body)
         return panel
 
+    def _fit_to_content(self) -> None:
+        """按内容定高。
+
+        原先固定 520：只有「电量」一个属性的门锁也只占三分之一，下面全是空。
+        不能用 ``self.sizeHint()``——中间的滚动区给出的高度是它自己的默认值，
+        不反映里面到底放了多少行，算出来永远是同一个数（内容会被切掉）。
+        所以按「标题栏 + 头部 + 内容 + 命令面板 + 底部」逐块累加。
+        """
+        content = self._scroll.widget()
+        body = content.sizeHint().height() if content is not None else 160
+        chrome = (
+            self._titlebar.sizeHint().height()
+            + self._header.sizeHint().height()
+            + self._footer.sizeHint().height()
+            + 28  # shell 的外边距 14 * 2
+        )
+        if self._show_advanced and self._command_panel.isVisible():
+            chrome += self._command_panel.sizeHint().height()
+        self.resize(560, max(380, min(680, chrome + body + 10)))
+
+    # ---------- 高级信息 ----------
+    def _apply_advanced(self, rebuild: bool = False) -> None:
+        """按「显示高级信息」切换命令面板、提示语与属性列表。"""
+        panel = getattr(self, "_command_panel", None)
+        if panel is not None:
+            panel.setVisible(self._show_advanced)
+        hint = getattr(self, "_hint", None)
+        if hint is not None:
+            hint.setText(
+                "命令下发后，设备响应会显示在主窗口「运行日志」中。"
+                if self._show_advanced
+                else "只显示可操作的选项；只读诊断信息已收起。"
+            )
+        if rebuild:
+            self._refresh_header(self._device)
+            self._rebuild_properties(device_spec.build_service_specs(self._device))
+            # 布局刚换，sizeHint 要等这一轮事件循环结束才是新的；
+            # 立刻取会按旧内容算高度，把新增的行挤到滚动区外面。
+            QTimer.singleShot(0, self._fit_to_content)
+
+    def _on_advanced_toggled(self, checked: bool) -> None:
+        self._show_advanced = bool(checked)
+        self._apply_advanced(rebuild=True)
+        self.advanced_changed.emit(self._show_advanced)
+
+    def show_advanced(self) -> bool:
+        return self._show_advanced
+
     def _mini_label(self, text: str) -> QLabel:
         label = QLabel(text)
         label.setObjectName("Caption")
@@ -286,7 +375,16 @@ class DeviceDialog(QDialog):
         layout.setContentsMargins(18, 10, 18, 14)
         layout.setSpacing(8)
 
-        self._hint = QLabel("命令下发后，设备响应会显示在主窗口「运行日志」中。")
+        self._advanced_box = QCheckBox("显示高级信息")
+        self._advanced_box.setToolTip(
+            "只读诊断字段（信号强度、电压、原始数据）与协议命令下发默认收起，\n"
+            "勾选后一并显示。"
+        )
+        self._advanced_box.setChecked(self._show_advanced)
+        self._advanced_box.toggled.connect(self._on_advanced_toggled)
+        layout.addWidget(self._advanced_box)
+
+        self._hint = QLabel("")
         self._hint.setObjectName("Caption")
         layout.addWidget(self._hint, 1)
 
@@ -328,7 +426,7 @@ class DeviceDialog(QDialog):
     def _refresh_header(self, device: Device) -> None:
         kind = device_spec.device_kind(device)
         self._avatar.set_device(device_spec.device_initial(device), kind)
-        self._name.setText(device.name or device.dev_id)
+        self._name.setText(device.name or "未命名设备")
 
         online = device.online
         state = "online" if online is True else "offline" if online is False else "unknown"
@@ -338,10 +436,12 @@ class DeviceDialog(QDialog):
         bits = []
         if device.model:
             bits.append(f"型号 {device.model}")
-        if device.firmware_version:
-            bits.append(f"固件 {device.firmware_version}")
-        if device.manufacturer:
-            bits.append(device.manufacturer)
+        if self._show_advanced:
+            # 固件版本和厂商是排查时才会看的，默认不占地方
+            if device.firmware_version:
+                bits.append(f"固件 {device.firmware_version}")
+            if device.manufacturer:
+                bits.append(device.manufacturer)
         self._detail.setText(" · ".join(bits) if bits else "—")
 
         found = device_spec.find_switch_service(device)
@@ -375,7 +475,12 @@ class DeviceDialog(QDialog):
             return
 
         main_switch = device_spec.find_switch_service(self._device)
+        added = 0
         for service in specs:
+            # 只读服务（电量统计、网络信息、故障检测、固件更新）默认不展示：
+            # 它们是排查工具，不是日常操作。
+            if not self._show_advanced and service.readonly:
+                continue
             properties = list(service.properties)
             # 头部已有三态电源开关，服务块里不再重复同一个开关属性
             if main_switch is not None:
@@ -384,11 +489,37 @@ class DeviceDialog(QDialog):
                     for item in properties
                     if not (item.sid == main_switch[0] and item.key == main_switch[1])
                 ]
+            if not self._show_advanced:
+                properties = [item for item in properties if self._is_daily_property(item)]
             if not properties:
                 continue
             self._body.addWidget(self._build_service_block(service, properties))
+            added += 1
+        if added == 0:
+            # 例如只有「开关 + 电量统计」的插座：开关挪到了头部，
+            # 统计服务默认收起，过滤后一块都不剩——不说一句会让人以为坏了。
+            self._empty_hint = QLabel(
+                "该设备没有可直接操作的选项。\n"
+                "勾选「显示高级信息」可以查看只读状态与协议细节。"
+            )
+            self._empty_hint.setObjectName("Body")
+            self._empty_hint.setWordWrap(True)
+            self._body.addWidget(self._empty_hint)
+        else:
+            self._empty_hint = None
         self._body.addStretch(1)
         self._refresh_service_combo(specs)
+
+    @staticmethod
+    def _is_daily_property(prop: PropertySpec) -> bool:
+        """这个属性要不要出现在默认视图里。
+
+        能动手的一律保留；只读的只留温度、电量这类日常指标。
+        信号强度、电压、原始 JSON 是排查协议用的，归到「显示高级信息」。
+        """
+        if prop.kind in _ACTIONABLE_KINDS:
+            return True
+        return prop.key.lower() in _DAILY_METRIC_KEYS
 
     def _build_service_block(
         self, service: ServiceSpec, properties: list[PropertySpec]
@@ -464,7 +595,7 @@ class DeviceDialog(QDialog):
             text = (
                 format_number(prop.value)
                 if prop.kind == KIND_READONLY_NUMBER
-                else str(prop.value)
+                else translate_value(prop.value)
             )
             value = QLabel(text)
             value.setObjectName("Caption" if prop.kind == KIND_READONLY_TEXT else "Value")
@@ -567,7 +698,7 @@ class DeviceDialog(QDialog):
         sid, key, _value = found
         self._send(sid, {key: 1 if checked else 0})
 
-    def _on_advanced_toggled(self, expanded: bool) -> None:
+    def _on_command_panel_toggled(self, expanded: bool) -> None:
         self._advanced_body.setVisible(expanded)
         self.adjustSize()
 

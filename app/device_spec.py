@@ -302,13 +302,13 @@ _PROTO_LABELS: dict[str, str] = {
     "load": "负载",
     "maximum": "最大值",
     "minimum": "最小值",
-    "total": "总计",
     "today": "今日",
     "video": "视频",
     "audio": "音频",
     "record": "录像",
     "visitpoint": "访客点",
     "visit": "访客",
+    "point": "点",
     "move": "移动",
     "ntwk": "网络",
     "wlanbasic": "WiFi 信息",
@@ -317,10 +317,125 @@ _PROTO_LABELS: dict[str, str] = {
     "hostinfo": "主机信息",
     "system": "系统",
     "upgrade": "升级",
-    "progress": "进度",
-    "remaining": "剩余",
-    "duration": "时长",
+    # 家电品类与常见工作字段：设备详情里出现英文基本都缺在这里
+    "washer": "洗衣机",
+    "washingmachine": "洗衣机",
+    "refrigerator": "冰箱",
+    "fridge": "冰箱",
+    "microwave": "微波炉",
+    "oven": "烤箱",
+    "dishwasher": "洗碗机",
+    "waterpurifier": "净水器",
+    "dehumidifier": "除湿机",
+    "airpurifier": "空气净化器",
+    "robot": "扫地机器人",
+    "doorlock": "门锁",
+    "fanspeed": "风速",
+    "windspeed": "风速",
+    "wind": "风",
+    "swing": "摆风",
+    "vertical": "上下摆风",
+    "horizontal": "左右摆风",
+    "waterlevel": "水位",
+    "program": "程序",
+    "cycle": "周期",
+    "stage": "阶段",
+    "wash": "洗涤",
+    "spin": "脱水",
+    "rinse": "漂洗",
+    "dry": "烘干",
+    "ion": "负离子",
+    "anion": "负离子",
+    "uvc": "紫外线",
+    "sterilize": "除菌",
+    "filter": "滤芯",
+    "filterlife": "滤芯寿命",
+    "tvoc": "有机污染物",
+    "scene": "场景",
+    "input": "输入源",
+    "source": "信号源",
+    "channel": "频道",
+    "charging": "充电中",
+    "doorstate": "门状态",
+    "openstate": "开合状态",
+    "fault": "故障",
+    "errorcode": "错误码",
+    "todayenergy": "今日用电",
+    "heat": "制热",
+    "cool": "制冷",
+    "auto": "自动",
+    "manual": "手动",
+    "sleep": "睡眠",
+    "eco": "节能",
+    "timer": "定时",
+    "delay": "延迟",
+    "keepwarm": "保温",
+    "alarm": "告警",
+    "idle": "待机",
+    "standby": "待机",
+    "working": "工作中",
+    "running": "运行中",
+    "paused": "已暂停",
 }
+
+# 协议里的枚举值（``status: "idle"``）也要翻，否则界面上还是一串英文。
+# 只收录确认无语义的短词，认不出来就原样显示，绝不猜测。
+_ENUM_VALUES: dict[str, str] = {
+    "idle": "待机",
+    "standby": "待机",
+    "working": "工作中",
+    "running": "运行中",
+    "on": "开",
+    "off": "关",
+    "open": "打开",
+    "opened": "已打开",
+    "closed": "已关闭",
+    "close": "关闭",
+    "auto": "自动",
+    "manual": "手动",
+    "sleep": "睡眠",
+    "eco": "节能",
+    "heat": "制热",
+    "cool": "制冷",
+    "dry": "烘干",
+    "fan": "送风",
+    "wind": "送风",
+    "none": "无",
+    "null": "无",
+    "unknown": "未知",
+    "normal": "正常",
+    "abnormal": "异常",
+    "error": "故障",
+    "fault": "故障",
+    "alarm": "告警",
+    "true": "是",
+    "false": "否",
+    "yes": "是",
+    "no": "否",
+    "online": "在线",
+    "offline": "离线",
+    "paused": "已暂停",
+    "stopped": "已停止",
+    "finished": "已完成",
+    "waiting": "等待中",
+    "heating": "加热中",
+    "cooling": "制冷中",
+    "charging": "充电中",
+    "full": "已充满",
+    "empty": "空",
+    "locked": "已上锁",
+    "unlocked": "已解锁",
+}
+
+
+def translate_value(value: object) -> str:
+    """把协议枚举值翻成中文；认不出来原样返回，绝不改写设备名等内容。"""
+    if not isinstance(value, str):
+        return str(value)
+    text = value.strip()
+    if not text:
+        return "—"
+    return _ENUM_VALUES.get(text.lower(), text)
 
 _SID_OVERRIDE: dict[str, str] = {
     "power": "电源",
@@ -362,6 +477,11 @@ def humanize_key(key: str, kind: str = "prop") -> str:
         translated: list[str] = []
         for word in words:
             low_word = word.lower()
+            # 序号原样保留（visitPoint6 → 访客点6）。以前数字也被当成
+            # "未收录的词"，整串直接退化成英文，带了序号的字段全露英文。
+            if low_word.isdigit():
+                translated.append(word)
+                continue
             if low_word not in _PROTO_LABELS:
                 return " ".join(w[:1].upper() + w[1:] for w in words)
             translated.append(_PROTO_LABELS[low_word])

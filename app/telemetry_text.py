@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Mapping
 
-from .device_spec import humanize_key
+from .device_spec import humanize_key, translate_value
 
 # 值带单位的字段。华为的电流单位是 mA（1717 = 1.7A），功率是 W。
 _UNITS: dict[str, str] = {
@@ -74,7 +74,7 @@ def _format_value(key: str, value: Any) -> str:
         text = f"{value:g}" if isinstance(value, float) else str(value)
         return f"{text}{unit}"
     if isinstance(value, str):
-        return value or "—"
+        return translate_value(value)
     if isinstance(value, Mapping):
         return f"{len(value)} 项"
     if isinstance(value, (list, tuple)):

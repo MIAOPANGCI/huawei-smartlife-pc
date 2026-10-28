@@ -460,14 +460,24 @@ class MainWindow(QMainWindow):
             self._device_dialog.close()
             self._device_dialog = None
 
-        dialog = DeviceDialog(device, self)
+        dialog = DeviceDialog(
+            device,
+            self,
+            show_advanced=bool(self._settings.get("device_advanced")),
+        )
         dialog.command_requested.connect(self._on_device_command)
         dialog.refresh_requested.connect(self.controller.refresh_device_state)
+        dialog.advanced_changed.connect(self._set_device_advanced)
         dialog.finished.connect(self._on_dialog_finished)
         self._device_dialog = dialog
         dialog.show()
         self._center_dialog(dialog)
         self.controller.refresh_device_state(dev_id)
+
+    def _set_device_advanced(self, enabled: bool) -> None:
+        """记住「显示高级信息」的选择，下次打开详情窗沿用。"""
+        self._settings["device_advanced"] = bool(enabled)
+        self._save_settings()
 
     def _center_dialog(self, dialog: DeviceDialog) -> None:
         """相对主窗口居中偏右，避免完全遮挡卡片。"""
