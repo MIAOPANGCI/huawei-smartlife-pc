@@ -54,6 +54,22 @@ from ..theme import theme
 from ..widgets.controls import SwitchButton
 from ..widgets.no_wheel import NoWheelComboBox, NoWheelSlider
 
+# 只读标志位的人话解释（鼠标悬停时显示）。
+# 这些字段的值是 0/1，但语义不是"能开能关"，直接摆出来只会让人困惑。
+_FLAG_HINTS: dict[str, str] = {
+    "ctlcapability": "设备支持的控制能力位图，由固件决定，只读",
+    "capability": "设备能力位图，由固件决定，只读",
+    "capabilities": "设备能力位图，由固件决定，只读",
+    "kitauth": "配网鉴权状态：设备是否已完成配网认证，只读",
+    "auth": "鉴权状态，只读",
+    "authentication": "鉴权状态，只读",
+    "support": "能力支持标记，只读",
+    "bound": "是否已绑定账号，只读",
+    "pairing": "是否处于配对状态，只读",
+    "fault": "故障标记，只读",
+    "errorcode": "错误码，只读",
+}
+
 # 用户能直接操作的控件类型。默认视图只保留这些，
 # 加上下面白名单里的少数只读指标。
 _ACTIONABLE_KINDS = (KIND_TOGGLE, KIND_SLIDER, KIND_TEXT)
@@ -332,7 +348,7 @@ class DeviceDialog(QDialog):
         )
         if self._show_advanced and self._command_panel.isVisible():
             chrome += self._command_panel.sizeHint().height()
-        self.resize(560, max(380, min(680, chrome + body + 10)))
+        self.resize(560, max(380, min(700, chrome + body + 18)))
 
     # ---------- 高级信息 ----------
     def _apply_advanced(self, rebuild: bool = False) -> None:
@@ -593,15 +609,35 @@ class DeviceDialog(QDialog):
             widget = self._build_slider(prop)
             layout.addWidget(widget, 1)
         elif prop.kind == KIND_TEXT:
+            # 定时 / 倒计时这类：给一个明确的数字输入框 + 单位，
+            # 只写一个「0」的话既看不出能输入，也不知道是分钟还是秒。
+            holder = QWidget()
+            holder_layout = QHBoxLayout(holder)
+            holder_layout.setContentsMargins(0, 0, 0, 0)
+            holder_layout.setSpacing(6)
+
             edit = QLineEdit(str(prop.value))
-            edit.setFixedWidth(120)
-            edit.setPlaceholderText("输入后回车")
+            edit.setFixedWidth(76)          # 太窄会被数字撑开，太宽像文本框
+            edit.setAlignment(Qt.AlignRight)
+            edit.setPlaceholderText("0")
+            edit.setToolTip(
+                f"点这里输入数字，按回车下发\n原始字段：{prop.key}"
+            )
             edit.returnPressed.connect(
                 lambda s=prop.sid, k=prop.key, p=prop, e=edit: self._send(
                     s, {k: self._coerce_text_value(p, e.text())}
                 )
             )
-            widget = edit
+            holder_layout.addWidget(edit)
+
+            unit_text = unit_of(prop.key) or self._duration_unit(prop.key)
+            if unit_text:
+                unit_label = QLabel(unit_text)
+                unit_label.setObjectName("Caption")
+                unit_label.setToolTip("单位按华为协议惯例，具体以设备为准")
+                holder_layout.addWidget(unit_label)
+
+            widget = holder
             layout.addWidget(widget, 0, Qt.AlignRight)
         elif prop.kind == KIND_JSON:
             preview = QPlainTextEdit(json.dumps(prop.value, ensure_ascii=False, indent=2))
@@ -620,6 +656,11 @@ class DeviceDialog(QDialog):
             value.setObjectName("Caption" if prop.kind == KIND_READONLY_TEXT else "Value")
             value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             value.setWordWrap(True)
+            # 只读项默认不展示（收在「显示高级信息」后面），能看到的都是
+            # 排查场景，悬停给出原始字段名便于对照协议
+            hint = _FLAG_HINTS.get(prop.key.lower(), "只读，不能下发")
+            value.setToolTip(f"{hint}\n原始字段：{prop.key}")
+            label.setToolTip(value.toolTip())
             widget = value
             layout.addWidget(widget, 1)
 
@@ -665,6 +706,24 @@ class DeviceDialog(QDialog):
         box._slider = slider  # type: ignore[attr-defined]
         box._scale = scale  # type: ignore[attr-defined]
         return box
+
+    @staticmethod
+    def _duration_unit(key: str) -> str:
+        """定时类字段的单位。
+
+        华为这几类字段常见是分钟（热水器预约、插座倒计时），但不保证，
+        界面上只作为提示，下发时始终发原始数字。
+        """
+        if str(key).strip().lower() in {
+            "timer",
+            "timing",
+            "delay",
+            "delaytime",
+            "countdown",
+            "appointment",
+        }:
+            return "分钟"
+        return ""
 
     @staticmethod
     def _coerce_text_value(prop: PropertySpec, text: str) -> object:

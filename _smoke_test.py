@@ -960,6 +960,11 @@ def main() -> int:
         DeviceDialog._format_slider_value(no_unit_prop, 1) == "1",
     )
 
+    # 定时类输入框要给出单位提示，否则「0」不知道是分钟还是秒
+    check("定时有分钟单位", DeviceDialog._duration_unit("timer") == "分钟")
+    check("延迟有分钟单位", DeviceDialog._duration_unit("delay") == "分钟")
+    check("非时长字段不乱标单位", DeviceDialog._duration_unit("brightness") == "")
+
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")
     return 0

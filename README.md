@@ -188,7 +188,7 @@ HUAWEI-SMARTLIFE-PC/
 ├── run.bat                    # 一键启动（自检依赖，pythonw 后台运行）
 ├── run.vbs                    # 无窗口启动（双击即可）
 ├── requirements.txt
-├── _smoke_test.py             # 无头自检（179 项）
+├── _smoke_test.py             # 无头自检（182 项）
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
 │   ├── constants.py           # 域名 / App 标识 / REST 路径 / MQTT 参数
@@ -295,7 +295,8 @@ python _smoke_test.py     # 无需显示环境、不联网
 - 但值为 0/1 的**能力/鉴权/故障标志位**（`ctlCapability`、`kitAuth`）是只读的，
   给成开关会让人以为"能把鉴权关掉"，点一下就是一条无意义的下发；
 - **时长类**（`timer` / `delay` / `countdown`）用输入框而不是滑块：取值范围
-  通常是几百到几万（秒或分钟），滑块既拖不准也看不出具体数值；
+  通常是几百到几万（秒或分钟），滑块既拖不准也看不出具体数值。输入框右侧
+  标出单位（分钟），输入数字回车即下发；
 - 数值一律带单位（`45°C`、`0kW·h`、`-52dBm`），单位表在 `device_spec.unit_of()`，
   与运行日志的遥测摘要共用一份；没有对应单位的字段不瞎加。
 - `power` 这个键尤其要看值：`power: 1` 是电源开关，`power: 1717` 是实时功率（W）。
