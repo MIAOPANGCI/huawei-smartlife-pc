@@ -633,10 +633,35 @@ class AppController(QObject):
 
         self._emit(self.log, f"[消息] {topic}", "tag")
 
-    def _on_command_response(self, request_id: str, target: str, errcode) -> None:
+    def _on_command_response(
+        self,
+        request_id: str,
+        target: str,
+        errcode,
+        body: dict | None = None,
+    ) -> None:
         if errcode == 0:
             self._emit(self.notify, "设备已接受命令", "success")
             self._emit(self.log, f"命令响应：设备接受（{target}，errcode=0）", "success")
-        else:
-            self._emit(self.notify, f"设备拒绝了命令（errcode={errcode}）", "danger")
-            self._emit(self.log, f"命令响应：设备拒绝（{target}，errcode={errcode}）", "danger")
+            return
+
+        # 被拒时把响应体原样带上：错误码本身说明不了是哪个字段不对，
+        # 常见的 -12 是「参数不合法」，得看 body 里回了什么才知道缺什么。
+        detail = ""
+        if isinstance(body, dict):
+            extra = {
+                key: value
+                for key, value in body.items()
+                if key not in {"errcode", "errmessage", "errmsg"}
+            }
+            message = body.get("errmessage") or body.get("errmsg")
+            if message:
+                detail = f"：{message}"
+            elif extra:
+                detail = f"：{json.dumps(extra, ensure_ascii=False)}"
+        self._emit(self.notify, f"设备拒绝了命令（errcode={errcode}）", "danger")
+        self._emit(
+            self.log,
+            f"命令响应：设备拒绝（{target}，errcode={errcode}{detail}）",
+            "danger",
+        )

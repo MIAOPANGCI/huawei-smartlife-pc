@@ -37,7 +37,7 @@ from .models import AuthSession, MqttConnectionSettings, SmartHomeCloudRoute
 _LOGGER = logging.getLogger(__name__)
 
 MqttMessageHandler = Callable[[str, bytes], None]
-CommandResponseHandler = Callable[[str, str, object], None]
+CommandResponseHandler = Callable[[str, str, object, Mapping[str, Any]], None]
 
 
 def _reason_code_value(reason_code: object) -> int:
@@ -211,7 +211,7 @@ class HuaweiMqttController:
         if request_id is None:
             return
         try:
-            self._on_command_response(request_id, target, body.get("errcode"))
+            self._on_command_response(request_id, target, body.get("errcode"), body)
         except Exception:  # noqa: BLE001 - 防止回调异常影响网络循环
             _LOGGER.exception("处理命令响应回调时出错")
 

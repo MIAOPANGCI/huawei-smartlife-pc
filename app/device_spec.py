@@ -131,6 +131,12 @@ DURATION_KEYS: frozenset[str] = frozenset(
     }
 )
 
+# 时长服务里承载数值的键名。真实设备上 delay 服务的字段叫 num，
+# 不是 on/value，只有 sid 才说明它是时长。
+_TIME_VALUE_KEYS: frozenset[str] = frozenset(
+    {"num", "value", "time", "minute", "min", "minutes", "hour", "hours", "second", "seconds"}
+)
+
 # 值为 0/1、但语义是「能力 / 鉴权 / 故障」这类标志位：只能看，不能给开关。
 # 给成开关会让人以为"能把鉴权关掉"，点一下反而下发一条无意义命令。
 READONLY_FLAG_KEYS: frozenset[str] = frozenset(
@@ -390,6 +396,7 @@ _PROTO_LABELS: dict[str, str] = {
     "auth": "鉴权",
     "electric": "电量",
     "delay": "延迟",
+    "num": "数值",
     "timer": "定时",
     "timing": "定时",
     "hostinfo": "主机信息",
@@ -447,6 +454,7 @@ _PROTO_LABELS: dict[str, str] = {
     "eco": "节能",
     "timer": "定时",
     "delay": "延迟",
+    "num": "数值",
     "keepwarm": "保温",
     "alarm": "告警",
     "idle": "待机",
@@ -887,9 +895,12 @@ def _build_service_spec(svc: ServiceState) -> ServiceSpec:
                 spec.properties.append(
                     PropertySpec(sid, key, label, KIND_READONLY_NUMBER, value)
                 )
-            elif sem in DURATION_KEYS:
+            elif sem in DURATION_KEYS or (
+                sid_low in DURATION_KEYS and kl in _TIME_VALUE_KEYS
+            ):
                 # 时长类（定时 / 倒计时 / 延时）：范围通常几百到几万，
                 # 滑块既拖不准也没法表示具体分钟数，给个输入框回车下发。
+                # 注意 delay 服务的字段常叫 num，语义只在 sid 上。
                 spec.properties.append(PropertySpec(sid, key, label, KIND_TEXT, value))
             elif value in (0, 1) and not _has_range_meta(data):
                 # 0/1 且没给范围：这是开关或标志位，不是"可调数值"。
