@@ -884,6 +884,58 @@ def build_service_specs(device: Device) -> list[ServiceSpec]:
     return specs
 
 
+def _timer_clock(value: object) -> str:
+    """把 "160046Z" 这种 6 位时间串翻成 16:00:46。"""
+    text = str(value or "").strip().rstrip("Z")
+    if len(text) == 6 and text.isdigit():
+        return f"{text[0:2]}:{text[2:4]}:{text[4:6]}"
+    return text
+
+
+def _timer_action(value: object) -> str:
+    """paraValue 的含义：-1 是「切换」，0/1 是关/开。"""
+    if value == -1:
+        return "切换"
+    if value in (1, True):
+        return "开启"
+    if value in (0, False):
+        return "关闭"
+    return "" if value is None else str(value)
+
+
+def describe_timer_tasks(tasks: object) -> str:
+    """把 timer 服务里的任务数组翻成可读的多行文本。
+
+    真实结构（对着官方 App 设的定时抄下来的）::
+
+        {"timer": [{"week": 0, "para": "on", "enable": 1,
+                    "start": "160046Z", "end": "160546Z",
+                    "paraValue": -1, "id": 1, "sid": "switch"}], "num": 1}
+
+    含义是「start 到 end 之间，把 sid 服务的 para 属性设为 paraValue」。
+    这是一个时间窗 + 动作，不是「延迟多少分钟」，所以没法用输入框表达。
+    """
+    if not isinstance(tasks, (list, tuple)) or not tasks:
+        return "无定时任务"
+    lines: list[str] = []
+    for index, task in enumerate(tasks, start=1):
+        if not isinstance(task, Mapping):
+            continue
+        start = _timer_clock(task.get("start"))
+        end = _timer_clock(task.get("end"))
+        span = f"{start} → {end}" if end else start
+        para = str(task.get("para") or "").strip()
+        action = _timer_action(task.get("paraValue"))
+        target = humanize_key(para) if para else ""
+        detail = " ".join(part for part in (action, target) if part)
+        week = task.get("week")
+        repeat = "" if week in (0, "0", None) else f"重复 {week}"
+        state = "" if task.get("enable") in (1, True) else "（已停用）"
+        pieces = [f"#{index}", span, detail, repeat, state]
+        lines.append(" ".join(piece for piece in pieces if piece))
+    return "\n".join(lines) if lines else "无定时任务"
+
+
 def _build_service_spec(svc: ServiceState) -> ServiceSpec:
     sid = svc.sid
     sid_low = sid.lower()
@@ -909,6 +961,16 @@ def _build_service_spec(svc: ServiceState) -> ServiceSpec:
         # 判断类型一律看语义键：data 里可能只有个 on
         sem = semantic or kl
         label = humanize_key(key)
+
+        # 定时任务数组：翻成可读列表。
+        # 这一项永远是只读——下发要构造完整的时间窗，不是填个数字。
+        if sid_low in DURATION_KEYS and isinstance(value, (list, tuple)):
+            spec.properties.append(
+                PropertySpec(
+                    sid, key, "定时任务", KIND_READONLY_TEXT, describe_timer_tasks(value)
+                )
+            )
+            continue
 
         if readonly:
             spec.properties.append(_readonly_spec(sid, key, label, value))

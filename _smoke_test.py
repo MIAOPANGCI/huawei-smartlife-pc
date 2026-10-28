@@ -1102,6 +1102,41 @@ def main() -> int:
     )
     check("访客点保留序号可区分", "访客点5" in visit_text and "访客点6" in visit_text)
 
+    # ---- 36. 定时任务数组翻译成可读时间窗 ----
+    timer_tasks = [
+        {
+            "week": 0, "para": "on", "enable": 1, "start": "160046Z",
+            "paraValue": -1, "end": "160546Z", "id": 1, "sid": "switch",
+        },
+        {
+            "week": 0, "para": "on", "enable": 0, "start": "073000Z",
+            "paraValue": 0, "end": "080000Z", "id": 2, "sid": "switch",
+        },
+    ]
+    readable = device_spec.describe_timer_tasks(timer_tasks)
+    check("定时任务解析出时间", "16:00:46" in readable and "16:05:46" in readable)
+    check("定时任务解析出动作", "切换" in readable)
+    check("多条任务逐条列出", "#1" in readable and "#2" in readable)
+    check("停用的任务有标记", "已停用" in readable)
+    check("空数组给出明确文案", device_spec.describe_timer_tasks([]) == "无定时任务")
+
+    # 定时服务虽然只读，但「定时任务」这一行必须留在默认视图里
+    ac_device = Device(
+        home_id="h1",
+        dev_id="dev-ac-timer",
+        name="空调",
+        online=True,
+        services={
+            "switch": ServiceState(sid="switch", data={"on": 0}),
+            "timer": ServiceState(sid="timer", data={"num": 1, "timer": timer_tasks}),
+        },
+    )
+    timer_dialog = DeviceDialog(ac_device, window)
+    timer_labels = {prop.label for prop, _row in timer_dialog._rows}
+    check("默认视图能看到定时任务", "定时任务" in timer_labels)
+    check("定时任务不给编辑控件", "switch" not in {prop.sid for prop, _row in timer_dialog._rows})
+    timer_dialog.close()
+
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")
     return 0

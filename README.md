@@ -188,7 +188,7 @@ HUAWEI-SMARTLIFE-PC/
 ├── run.bat                    # 一键启动（自检依赖，pythonw 后台运行）
 ├── run.vbs                    # 无窗口启动（双击即可）
 ├── requirements.txt
-├── _smoke_test.py             # 无头自检（205 项）
+├── _smoke_test.py             # 无头自检（212 项）
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
 │   ├── constants.py           # 域名 / App 标识 / REST 路径 / MQTT 参数
@@ -297,9 +297,19 @@ python _smoke_test.py     # 无需显示环境、不联网
 - **时长类**（`timer` / `delay` / `countdown`）用输入框而不是滑块：取值范围
   通常是几百到几万（秒或分钟），滑块既拖不准也看不出具体数值。输入框右侧
   标出单位（分钟），输入数字回车即下发；
-- 但如果那个服务的数据是**数组**（真实空调是 `{"timer": [], "num": 0}`，
-  即任务列表 + 任务数），就不是"填个数字"能设的——给输入框用户一点设备就回
-  `errcode=-12`。这类服务目前**只读展示**，等做了任务列表界面再放开；
+- 但如果那个服务的数据是**数组**，就不是"填个数字"能设的——给输入框用户
+  一点设备就回 `errcode=-12`。真实结构（对着官方 App 设的定时抄下来）：
+
+  ```json
+  {"timer": [{"week": 0, "para": "on", "enable": 1, "paraValue": -1,
+              "start": "160046Z", "end": "160546Z", "id": 1, "sid": "switch"}],
+   "num": 1}
+  ```
+
+  含义是「start 到 end 之间，把 sid 服务的 para 属性设为 paraValue」，
+  是一个时间窗 + 动作。`describe_timer_tasks()` 把它翻成
+  `#1 16:00:46 → 16:05:46 切换 开关`，在详情窗**只读展示**；
+  真正下发要构造完整时间窗，还没做；
 - 数值一律带单位（`45°C`、`0kW·h`、`-52dBm`），单位表在 `device_spec.unit_of()`，
   与运行日志的遥测摘要共用一份；没有对应单位的字段不瞎加。
 - `power` 这个键尤其要看值：`power: 1` 是电源开关，`power: 1717` 是实时功率（W）。

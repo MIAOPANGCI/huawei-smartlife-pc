@@ -511,8 +511,14 @@ class DeviceDialog(QDialog):
         for service in specs:
             # 只读服务（电量统计、网络信息、故障检测、固件更新）默认不展示：
             # 它们是排查工具，不是日常操作。
+            # 但定时任务是「设备现在设了几个定时、什么时候执行」，
+            # 属于状态而非诊断，默认要看得见。
             if not self._show_advanced and service.readonly:
-                continue
+                has_timer_tasks = any(
+                    prop.label == "定时任务" for prop in service.properties
+                )
+                if not has_timer_tasks:
+                    continue
             properties = list(service.properties)
             # 头部已有三态电源开关，服务块里不再重复同一个开关属性
             if main_switch is not None:
@@ -549,6 +555,9 @@ class DeviceDialog(QDialog):
         能动手的一律保留；只读的只留温度、电量这类日常指标。
         信号强度、电压、原始 JSON 是排查协议用的，归到「显示高级信息」。
         """
+        # 定时任务是设备当前状态（设了几个、什么时候执行），不是诊断信息
+        if prop.label == "定时任务":
+            return True
         if prop.kind in _ACTIONABLE_KINDS:
             return True
         return prop.key.lower() in _DAILY_METRIC_KEYS
@@ -660,7 +669,10 @@ class DeviceDialog(QDialog):
             )
             value = QLabel(text)
             value.setObjectName("Caption" if prop.kind == KIND_READONLY_TEXT else "Value")
-            value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            # 多行（定时任务列表）左对齐，单值右对齐贴边
+            value.setAlignment(
+                (Qt.AlignLeft if "\n" in text else Qt.AlignRight) | Qt.AlignVCenter
+            )
             value.setWordWrap(True)
             # 只读项默认不展示（收在「显示高级信息」后面），能看到的都是
             # 排查场景，悬停给出原始字段名便于对照协议
