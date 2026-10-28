@@ -475,9 +475,16 @@ class MainWindow(QMainWindow):
         self.controller.refresh_device_state(dev_id)
 
     def _set_device_advanced(self, enabled: bool) -> None:
-        """记住「显示高级信息」的选择，下次打开详情窗沿用。"""
+        """记住「显示高级信息」的选择。
+
+        设置对话框和详情窗底部都能改这一项，两处共用同一个键；
+        详情窗开着的时候要跟着立即生效，否则用户会以为设置没作用。
+        """
         self._settings["device_advanced"] = bool(enabled)
         self._save_settings()
+        dialog = self._device_dialog
+        if dialog is not None and dialog.isVisible():
+            dialog.set_show_advanced(bool(enabled))
 
     def _center_dialog(self, dialog: DeviceDialog) -> None:
         """相对主窗口居中偏右，避免完全遮挡卡片。"""
@@ -547,13 +554,15 @@ class MainWindow(QMainWindow):
             self.controller.account,
             families,
             self._settings.get("startup_view", "all"),
-            bool(self._settings.get("capture_telemetry")),
-            self,
+            capture_enabled=bool(self._settings.get("capture_telemetry")),
+            device_advanced=bool(self._settings.get("device_advanced")),
+            parent=self,
         )
         dialog.mode_changed.connect(self._set_mode)
         dialog.accent_changed.connect(self._set_accent)
         dialog.startup_view_changed.connect(self._set_startup_view)
         dialog.capture_changed.connect(self._set_capture)
+        dialog.device_advanced_changed.connect(self._set_device_advanced)
         dialog.logout_requested.connect(self.controller.logout)
         dialog.exec()
 

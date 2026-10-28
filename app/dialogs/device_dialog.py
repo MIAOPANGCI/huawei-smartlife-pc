@@ -361,6 +361,22 @@ class DeviceDialog(QDialog):
     def show_advanced(self) -> bool:
         return self._show_advanced
 
+    def set_show_advanced(self, enabled: bool) -> None:
+        """由设置对话框改动时同步过来。
+
+        不重新 emit ``advanced_changed``：调用方（主窗口）已经知道这件事，
+        再发一遍会变成「存盘 → 同步 → 再存盘」的来回打转。
+        """
+        enabled = bool(enabled)
+        if enabled == self._show_advanced:
+            return
+        box = self._advanced_box
+        box.blockSignals(True)
+        box.setChecked(enabled)
+        box.blockSignals(False)
+        self._show_advanced = enabled
+        self._apply_advanced(rebuild=True)
+
     def _mini_label(self, text: str) -> QLabel:
         label = QLabel(text)
         label.setObjectName("Caption")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -50,6 +52,7 @@ class SettingsDialog(QDialog):
     accent_changed = Signal(str)
     startup_view_changed = Signal(str)
     capture_changed = Signal(bool)
+    device_advanced_changed = Signal(bool)
     logout_requested = Signal()
 
     def __init__(
@@ -58,6 +61,7 @@ class SettingsDialog(QDialog):
         families: list[tuple[str, str]] | None = None,
         startup_view: str = "all",
         capture_enabled: bool = False,
+        device_advanced: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -68,12 +72,26 @@ class SettingsDialog(QDialog):
         self._families = families or []
         self._startup_view = startup_view
         self._capture_enabled = bool(capture_enabled)
+        self._device_advanced = bool(device_advanced)
         self._build()
 
     def _build(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 20)
+        # 设置项只会越来越多（外观/启动/诊断/账号/关于），小屏笔记本上直接铺开
+        # 会把底部按钮顶到屏幕外，包一层滚动区；关闭按钮固定在滚动区下方。
+        shell = QVBoxLayout(self)
+        shell.setContentsMargins(24, 22, 24, 16)
+        shell.setSpacing(10)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
+        self._scroll.setWidget(content)
+        shell.addWidget(self._scroll, 1)
 
         title = QLabel("设置")
         title.setObjectName("PageTitle")
@@ -157,6 +175,20 @@ class SettingsDialog(QDialog):
 
         # ---- 诊断 ----
         layout.addWidget(self._section("诊断"))
+        self._advanced_box = QCheckBox("设备详情显示高级信息")
+        self._advanced_box.setChecked(self._device_advanced)
+        self._advanced_box.toggled.connect(self._on_device_advanced_toggled)
+        layout.addWidget(self._advanced_box)
+
+        advanced_hint = QLabel(
+            "默认只显示能操作的选项（开关、滑块，以及温度、电量这类日常指标）。"
+            "勾选后详情窗会展示只读诊断字段（信号强度、电压、原始数据）"
+            "与协议命令下发面板。"
+        )
+        advanced_hint.setObjectName("Caption")
+        advanced_hint.setWordWrap(True)
+        layout.addWidget(advanced_hint)
+
         self._capture_box = QCheckBox("协议调试订阅（收到账号下所有 MQTT 消息）")
         self._capture_box.setChecked(self._capture_enabled)
         self._capture_box.toggled.connect(self._on_capture_toggled)
@@ -218,12 +250,42 @@ class SettingsDialog(QDialog):
         close.setObjectName("Primary")
         close.clicked.connect(self.accept)
         close_row.addWidget(close)
-        layout.addLayout(close_row)
+        shell.addLayout(close_row)
+
+        self._fit_to_screen()
+
+    def _fit_to_screen(self) -> None:
+        """高度不超过屏幕可用区域的 85%，超出的部分交给滚动区。
+
+        不加限制的话，Qt 会按 sizeHint 给一个 800+ 高的窗口，
+        在 1366x768 这类笔记本上底部按钮会跑到屏幕外面。
+        """
+        # 不能用 self.sizeHint()：滚动区给出的高度是它自己的默认值，
+        # 跟里面放了多少内容无关（会算出一个 464 的矮窗，实际要 834）。
+        content = self._scroll.widget()
+        body = content.sizeHint().height() if content is not None else 480
+        margins = self.layout().contentsMargins()
+        chrome = (
+            margins.top()
+            + margins.bottom()
+            + self.layout().spacing()
+            + 46  # 底部「关闭」按钮一行
+        )
+        natural = body + chrome
+        height = natural
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            height = min(natural, max(380, int(screen.availableGeometry().height() * 0.85)))
+        self.resize(self.sizeHint().width(), height)
 
     def _section(self, text: str) -> QLabel:
         label = QLabel(text)
         label.setObjectName("SectionTitle")
         return label
+
+    def _on_device_advanced_toggled(self, checked: bool) -> None:
+        self._device_advanced = bool(checked)
+        self.device_advanced_changed.emit(self._device_advanced)
 
     def _on_capture_toggled(self, checked: bool) -> None:
         self._capture_enabled = bool(checked)

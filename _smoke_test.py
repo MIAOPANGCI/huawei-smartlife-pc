@@ -815,6 +815,54 @@ def main() -> int:
     )
     slider_dialog.close()
 
+    # ---- 29. 设置里的「设备详情显示高级信息」----
+    from app.dialogs.settings_dialog import SettingsDialog  # noqa: E402
+
+    # 别把测试用的开关写进用户真实的 ui_settings.json
+    original_settings = dict(window._settings)
+    original_save = window._save_settings
+    window._save_settings = lambda: None
+    try:
+        settings_dialog = SettingsDialog(
+            "138****0000", [("h1", "我的家")], "all", parent=window
+        )
+        check("设置里默认不勾选高级信息", settings_dialog._advanced_box.isChecked() is False)
+
+        detail = DeviceDialog(controller.store.get("dev-heater"), window)
+        window._device_dialog = detail
+        detail.show()
+        app.processEvents()
+        check("详情窗初始不含高级信息", detail.show_advanced() is False)
+
+        seen: list[bool] = []
+        settings_dialog.device_advanced_changed.connect(seen.append)
+        settings_dialog.device_advanced_changed.connect(window._set_device_advanced)
+
+        settings_dialog._advanced_box.setChecked(True)
+        app.processEvents()
+        check("设置开关会通知外部", seen == [True])
+        check("已打开的详情窗立即跟着变", detail.show_advanced() is True)
+        check("开关状态回写到设置", window._settings.get("device_advanced") is True)
+
+        # 详情窗自己的勾选框也要同步，不能出现"内容展开了但框还是空的"
+        check("详情窗勾选框同步", detail._advanced_box.isChecked() is True)
+
+        settings_dialog._advanced_box.setChecked(False)
+        app.processEvents()
+        check("取消后详情窗也收回去", detail.show_advanced() is False)
+
+        detail.close()
+        app.processEvents()
+        # 关掉的详情窗不该再被设置影响
+        settings_dialog._advanced_box.setChecked(True)
+        app.processEvents()
+        check("已关闭的详情窗不再接收同步", detail.show_advanced() is False)
+        settings_dialog.close()
+    finally:
+        window._save_settings = original_save
+        window._settings = original_settings
+        window._device_dialog = None
+
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")
     return 0
