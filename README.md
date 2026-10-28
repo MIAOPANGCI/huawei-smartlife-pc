@@ -28,7 +28,7 @@ Windows 桌面端的华为智慧生活控制程序：华为账号登录（含会
 | 托盘面板    | ✅  | 托盘图标左键弹出设备浮层，双列/单列切换，卡片上直接开关（不弹详情）           |
 | 桌面挂件    | ✅  | 常驻桌面横向设备条，可拖动、置顶、锁定、收起，位置与状态持久化              |
 | 设备自选与排序 | ✅  | 托盘面板与桌面挂件均可自选设备、自由排序，顺序持久化                   |
-| 运行日志    | ✅  | 遥测、命令响应、错误按级别着色，便于排查                         |
+| 运行日志    | ✅  | 中文摘要（`热水器 · 电源 电流 1717mA`），遥测默认折叠、按需展开   |
 | 摄像头     | ⚠️ | 消费级摄像头走私有加密协议，PC 端无法直接拉流（库中保留了 RTSP 辅助）      |
 
 ## 界面
@@ -170,7 +170,7 @@ HUAWEI-SMARTLIFE-PC/
 ├── run.bat                    # 一键启动（自检依赖，pythonw 后台运行）
 ├── run.vbs                    # 无窗口启动（双击即可）
 ├── requirements.txt
-├── _smoke_test.py             # 无头自检（106 项）
+├── _smoke_test.py             # 无头自检（130 项）
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
 │   ├── constants.py           # 域名 / App 标识 / REST 路径 / MQTT 参数
@@ -190,6 +190,7 @@ HUAWEI-SMARTLIFE-PC/
     ├── widget_board.py        # 桌面挂件（可拖动 / 锁定 / 收起）
     ├── state.py               # 设备状态存储与合并（纯 Python）
     ├── device_spec.py         # 设备能力推断与中文标签（纯 Python）
+    ├── telemetry_text.py      # MQTT 报文 → 中文摘要（纯 Python）
     ├── theme.py               # 调色板 + QSS 生成
     ├── workers.py             # 线程池：网络调用不阻塞 UI
     ├── dispatch.py            # 主线程投递器（跨线程回调统一回主线程）
@@ -254,6 +255,8 @@ python _smoke_test.py     # 无需显示环境、不联网
 - Broker：由云端路由接口返回（`smarthomehost`），端口 8883，TLS；
 - 认证：`username = user_id`，`password = oauth_access_token`；
 - 订阅：`/smartHome/signaltrans/v2/categories/command`（遥测与命令响应同一通道）；
+  `signaltrans/#` 通配订阅只在设置里勾选「协议调试」时才加——它会收到账号下
+  所有客户端的消息（包括手机端官方 App 的查询），日常没必要；
 - 命令信封：`topic` 为裸主题，`header.to = /devices/{devId}/services/{serviceId}`，  
   `header.method = POST`，`header.mode = ACK`，`body` 为纯数据字典（如 `{"on": 1}`）；
 - 响应：`commandRsp` 回到同一通道，`header.from` 等于命令的 `to`，  
@@ -268,6 +271,20 @@ python _smoke_test.py     # 无需显示环境、不联网
 - 没有 `min/max` 元数据且值超出 0–100 的数值视为累计统计量，只读展示。
 
 这些规则集中在 `app/device_spec.py`，改协议适配只需动一个文件。
+
+## 运行日志
+
+设备遥测是主动上报的，一个功率计量设备每 3 秒就发一条。全量打印原始 JSON 会让
+日志几小时涨到几十 MB，真正的错误反而找不到。所以：
+
+- 界面显示的是**翻译过的中文摘要**：`[遥测] 热水器 · 电源 电流 1717mA`，
+  服务名、属性名走 `device_spec` 的中文词表，数值自动带单位（mA / W / °C / %）；
+- 查询响应也翻成可读路径：`【查询】网关 · 网络 · WiFi 信息（5 项）`，
+  不再把 `/devices/<uuid>/services/...` 整条打出来；
+- 遥测默认**折叠**，勾选日志页右上角「显示遥测」才展开；
+- 信封原文降级到 `app.log` 的 DEBUG 级，需要时把日志级别调低即可。
+
+> 翻译逻辑在 `app/telemetry_text.py`，不依赖 Qt，可单独测（自检里有 24 条覆盖）。
 
 ## 异常处理
 

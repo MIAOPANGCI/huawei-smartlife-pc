@@ -41,6 +41,7 @@ from huawei_smartlife.models import (
 
 from .dispatch import post
 from .state import DeviceStore
+from .telemetry_text import describe_query, describe_telemetry
 from .workers import run_async
 
 _LOGGER = logging.getLogger(__name__)
@@ -101,6 +102,9 @@ class AppController(QObject):
         self._remember_session = True
         self._account: str = ""
         self._mqtt_connected = False
+        # 协议调试：订阅 signaltrans/# 通配，能收到账号下所有客户端的消息。
+        # 默认关闭（由主窗口按 UI 设置注入），开启后日志会明显变吵。
+        self._capture_enabled = False
         self._scenes: list[Scene] = []
         self._busy_count = 0
         self._build_client()
@@ -456,14 +460,20 @@ class AppController(QObject):
     # ------------------------------------------------------------------
     # MQTT
     # ------------------------------------------------------------------
-    def connect_mqtt(self) -> None:
-        if self._mqtt_connected:
+    def connect_mqtt(self, force: bool = False) -> None:
+        if self._mqtt_connected and not force:
             return
         self._begin_busy("正在连接实时通道…")
         self._emit(self.log, "正在连接实时通道（MQTT）…", "info")
 
         def work():
-            self.client.connect_mqtt()
+            if force:
+                # 改订阅范围只能重连；先断开旧连接，避免两个 loop 同时收消息
+                try:
+                    self.client.disconnect_mqtt()
+                except Exception:  # noqa: BLE001 - 旧连接已经断了也没关系
+                    pass
+            self.client.connect_mqtt(capture=self._capture_enabled)
             return True
 
         def done(_result) -> None:
@@ -480,6 +490,29 @@ class AppController(QObject):
             self._emit(self.notify, "实时通道连接失败", "danger")
 
         run_async(work, done, failed)
+
+    def set_capture_enabled(self, enabled: bool, reconnect: bool = True) -> None:
+        """开关「协议调试订阅」。
+
+        开启后额外订阅 ``signaltrans/#`` 通配主题，能收到**整个账号下所有客户端**
+        的消息（包括手机端官方 App 发出的查询），排查协议时有用，但日常只会让
+        运行日志变吵。订阅范围在连接时确定，所以要重连才生效。
+        """
+        enabled = bool(enabled)
+        if enabled == self._capture_enabled:
+            return
+        self._capture_enabled = enabled
+        if enabled:
+            self._emit(
+                self.log,
+                "已开启协议调试订阅：将接收账号下所有 MQTT 消息（含官方 App 的查询）。",
+                "warning",
+            )
+        else:
+            self._emit(self.log, "已关闭协议调试订阅，只接收本机的命令响应与设备状态。", "info")
+        if reconnect and self._mqtt_connected:
+            self._emit(self.log, "实时通道将重新连接以应用新的订阅范围。", "info")
+            self.connect_mqtt(force=True)
 
     def disconnect_mqtt(self) -> None:
         try:
@@ -549,39 +582,56 @@ class AppController(QObject):
     # ------------------------------------------------------------------
     # MQTT 回调（来自 paho 网络线程 → 只发信号，不碰 UI）
     # ------------------------------------------------------------------
+    def _device_display_name(self, dev_id: str) -> str:
+        """dev_id → 设备名；设备不在快照里时返回空串，让摘要退回短 ID。"""
+        device = self.store.get(dev_id)
+        return device.name if device is not None else ""
+
     def _on_mqtt_message(self, topic: str, payload: dict) -> None:
         header = payload.get("header") if isinstance(payload, dict) else None
         notify_type = header.get("notifyType") if isinstance(header, dict) else None
 
-        if notify_type == "commandRsp":
-            tag, kind = "【命令响应】", "info"
-            method = header.get("method") if isinstance(header, dict) else None
-            if method == "GET":
-                # 官方 App 的查询响应体量很大，只记摘要
-                body = payload.get("body")
-                size = len(body) if isinstance(body, (list, dict)) else 0
-                self._emit(self.log, 
-                    f"【命令响应·查询】{header.get('from', '')}（{size} 项数据，已省略）",
-                    "info",
-                )
-                return
-        elif notify_type == "deviceDataChanged":
-            tag, kind = "[遥测]", "tag"
-        elif notify_type == "deviceStatus":
-            tag, kind = "[状态]", "tag"
-        else:
-            tag, kind = "[消息]", "tag"
+        # 信封原文只进 app.log（DEBUG 级），界面上用下面翻译好的中文摘要。
+        # 一个功率计量设备 3 秒一条，全量 dump 到界面几小时就能刷到几十 MB，
+        # 真正要看的错误反而被埋掉。想看原文时把日志级别调到 DEBUG 即可。
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            try:
+                _LOGGER.debug("MQTT %s %s", topic, json.dumps(payload, ensure_ascii=False))
+            except (TypeError, ValueError):
+                pass
 
-        self._emit(self.log, f"{tag} {topic} {json.dumps(payload, ensure_ascii=False)}", kind)
+        if notify_type == "commandRsp":
+            method = header.get("method") if isinstance(header, dict) else None
+            from_uri = header.get("from") if isinstance(header, dict) else ""
+            body = payload.get("body")
+            size = len(body) if isinstance(body, (list, dict)) else 0
+            if method == "GET":
+                # 官方 App / 网关的查询响应（旁听到的），只留可读路径
+                self._emit(self.log, f"【查询】{describe_query(from_uri, size)}", "info")
+            else:
+                self._emit(self.log, f"【命令响应】{describe_query(from_uri, size)}", "info")
+            return
 
         if notify_type == "deviceDataChanged":
+            # 遥测记为 detail：界面默认折叠，勾选「显示遥测」才出现
+            self._emit(
+                self.log,
+                f"[遥测] {describe_telemetry(payload, self._device_display_name)}",
+                "detail",
+            )
             result = self.store.apply_telemetry(payload)
             if result is not None:
                 self._emit(self.device_changed, result[0])
-        elif notify_type == "deviceStatus":
+            return
+
+        if notify_type == "deviceStatus":
+            self._emit(self.log, f"[状态] {describe_query(topic, 0).replace('（0 项）', '')}", "tag")
             result = self.store.apply_device_status(payload)
             if result is not None and result[1]:
                 self._emit(self.device_changed, result[0])
+            return
+
+        self._emit(self.log, f"[消息] {topic}", "tag")
 
     def _on_command_response(self, request_id: str, target: str, errcode) -> None:
         if errcode == 0:

@@ -65,6 +65,13 @@ class MainWindow(QMainWindow):
         self._connect_controller()
         self._apply_theme()
 
+        # 协议调试订阅默认关闭；注入一次，之后由设置对话框切换。
+        # 放在信号连接之后，那条「已开启」提示才有人显示。
+        # reconnect=False：此刻还没连实时通道，等登录后连接时自然带上。
+        self.controller.set_capture_enabled(
+            bool(self._settings.get("capture_telemetry")), reconnect=False
+        )
+
         # 启动后异步尝试恢复会话，避免卡住首屏
         QTimer.singleShot(120, self._bootstrap)
 
@@ -530,13 +537,25 @@ class MainWindow(QMainWindow):
             self.controller.account,
             families,
             self._settings.get("startup_view", "all"),
+            bool(self._settings.get("capture_telemetry")),
             self,
         )
         dialog.mode_changed.connect(self._set_mode)
         dialog.accent_changed.connect(self._set_accent)
         dialog.startup_view_changed.connect(self._set_startup_view)
+        dialog.capture_changed.connect(self._set_capture)
         dialog.logout_requested.connect(self.controller.logout)
         dialog.exec()
+
+    def _set_capture(self, enabled: bool) -> None:
+        """协议调试开关：存盘并让控制器重连以应用新的订阅范围。"""
+        self._settings["capture_telemetry"] = bool(enabled)
+        self._save_settings()
+        self.controller.set_capture_enabled(bool(enabled))
+        if enabled:
+            self.toast.show_toast("已开启协议调试订阅，日志会变详细", "warning")
+        else:
+            self.toast.show_toast("已关闭协议调试订阅", "info")
 
     def _set_startup_view(self, key: str) -> None:
         """记住「启动时默认打开」的分类，下次登录后自动跳转。"""

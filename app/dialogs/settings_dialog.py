@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
@@ -48,6 +49,7 @@ class SettingsDialog(QDialog):
     mode_changed = Signal(str)
     accent_changed = Signal(str)
     startup_view_changed = Signal(str)
+    capture_changed = Signal(bool)
     logout_requested = Signal()
 
     def __init__(
@@ -55,6 +57,7 @@ class SettingsDialog(QDialog):
         account: str,
         families: list[tuple[str, str]] | None = None,
         startup_view: str = "all",
+        capture_enabled: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -64,6 +67,7 @@ class SettingsDialog(QDialog):
         self._account = account
         self._families = families or []
         self._startup_view = startup_view
+        self._capture_enabled = bool(capture_enabled)
         self._build()
 
     def _build(self) -> None:
@@ -151,6 +155,27 @@ class SettingsDialog(QDialog):
         divider_startup.setFixedHeight(1)
         layout.addWidget(divider_startup)
 
+        # ---- 诊断 ----
+        layout.addWidget(self._section("诊断"))
+        self._capture_box = QCheckBox("协议调试订阅（收到账号下所有 MQTT 消息）")
+        self._capture_box.setChecked(self._capture_enabled)
+        self._capture_box.toggled.connect(self._on_capture_toggled)
+        layout.addWidget(self._capture_box)
+
+        capture_hint = QLabel(
+            "开启后会额外订阅 signaltrans 通配主题，连手机端官方 App 发出的查询"
+            "也会进到运行日志里——排查协议时有用，日常会让日志明显变吵。"
+            "切换后会重新连接实时通道。"
+        )
+        capture_hint.setObjectName("Caption")
+        capture_hint.setWordWrap(True)
+        layout.addWidget(capture_hint)
+
+        divider_diag = QFrame()
+        divider_diag.setObjectName("Divider")
+        divider_diag.setFixedHeight(1)
+        layout.addWidget(divider_diag)
+
         # ---- 账号 ----
         layout.addWidget(self._section("账号"))
         account_label = QLabel(f"当前账号：{self._account or '未登录'}")
@@ -199,6 +224,10 @@ class SettingsDialog(QDialog):
         label = QLabel(text)
         label.setObjectName("SectionTitle")
         return label
+
+    def _on_capture_toggled(self, checked: bool) -> None:
+        self._capture_enabled = bool(checked)
+        self.capture_changed.emit(self._capture_enabled)
 
     def _on_startup_changed(self, index: int) -> None:
         key = self._startup_combo.itemData(index)

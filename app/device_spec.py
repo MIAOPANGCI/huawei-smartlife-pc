@@ -297,6 +297,29 @@ _PROTO_LABELS: dict[str, str] = {
     "position": "位置",
     "percent": "百分比",
     "ratio": "比率",
+    # 下面这些主要出现在 MQTT 遥测里（摄像头访客点、网关卡片的统计字段），
+    # 补上以后运行日志的中文摘要不会夹杂英文单词。
+    "load": "负载",
+    "maximum": "最大值",
+    "minimum": "最小值",
+    "total": "总计",
+    "today": "今日",
+    "video": "视频",
+    "audio": "音频",
+    "record": "录像",
+    "visitpoint": "访客点",
+    "visit": "访客",
+    "move": "移动",
+    "ntwk": "网络",
+    "wlanbasic": "WiFi 信息",
+    "channelinfo": "信道信息",
+    "childhomepage": "子设备页面",
+    "hostinfo": "主机信息",
+    "system": "系统",
+    "upgrade": "升级",
+    "progress": "进度",
+    "remaining": "剩余",
+    "duration": "时长",
 }
 
 _SID_OVERRIDE: dict[str, str] = {

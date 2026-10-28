@@ -23,6 +23,7 @@ from datetime import datetime
 from PySide6.QtCore import QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -157,6 +158,10 @@ class DashboardPage(QWidget):
         self._account = ""
         self._card_width = 232
         self._tool_icons: list[tuple[QPushButton, str]] = []
+        # 日志分两档：常用信息常显，设备遥测（每秒都可能来）默认折叠。
+        # 缓存一份完整条目，切换「显示遥测」时整页重建，切回去历史还在。
+        self._log_entries: list[tuple[str, str, str]] = []
+        self._log_verbose = False
         self._build()
         self.refresh_icons()
         self._apply_view(self.VIEW_DEVICES)
@@ -294,13 +299,20 @@ class DashboardPage(QWidget):
         log_layout.setContentsMargins(0, 2, 0, 24)
         log_layout.setSpacing(8)
         head = QHBoxLayout()
-        caption = QLabel("设备状态推送、命令响应与错误都会记录在这里。")
+        caption = QLabel("操作、命令响应与错误都会记在这里；设备遥测默认折叠。")
         caption.setObjectName("Caption")
         head.addWidget(caption)
         head.addStretch(1)
+        self._log_verbose_box = QCheckBox("显示遥测")
+        self._log_verbose_box.setToolTip(
+            "设备主动上报的状态（如插座电流、摄像头访客点）每秒都可能来一条，\n"
+            "默认折叠以免刷屏。排查问题时再勾选。"
+        )
+        self._log_verbose_box.toggled.connect(self.set_log_verbose)
+        head.addWidget(self._log_verbose_box)
         clear_button = QPushButton("清空")
         clear_button.setObjectName("Ghost")
-        clear_button.clicked.connect(lambda: self._log_view.clear())
+        clear_button.clicked.connect(self.clear_logs)
         head.addWidget(clear_button)
         log_layout.addLayout(head)
 
@@ -637,22 +649,64 @@ class DashboardPage(QWidget):
             layout.addWidget(card)
 
     # ---------- 日志 ----------
+    _LOG_CACHE_LIMIT = 1500
+
     def append_log(self, message: str, kind: str = "info") -> None:
+        """追加一条运行日志。
+
+        kind="detail" 是设备遥测：默认不显示，勾选「显示遥测」后才出现。
+        """
+        stamp = datetime.now().strftime("%H:%M:%S")
+        self._log_entries.append((stamp, message, kind))
+        if len(self._log_entries) > self._LOG_CACHE_LIMIT:
+            del self._log_entries[: len(self._log_entries) - self._LOG_CACHE_LIMIT]
+        if kind == "detail" and not self._log_verbose:
+            return
+        self._render_log(stamp, message, kind)
+
+    def _render_log(self, stamp: str, message: str, kind: str) -> None:
         palette = theme().palette
         color = {
             "success": palette.ok,
             "warning": palette.warn,
             "danger": palette.danger,
             "tag": palette.accent,
+            "detail": palette.text_3,
         }.get(kind, palette.text_2)
-        stamp = datetime.now().strftime("%H:%M:%S")
         safe = html.escape(message).replace("\n", "<br/>")
         self._log_view.appendHtml(
             f'<span style="color:{palette.text_3}">{stamp}</span> '
             f'<span style="color:{color}">{safe}</span>'
         )
+
+    def set_log_verbose(self, enabled: bool) -> None:
+        """切换是否显示设备遥测，并按缓存重建整个日志视图。"""
+        enabled = bool(enabled)
+        if enabled == self._log_verbose:
+            return
+        self._log_verbose = enabled
+        # 勾选框与内部状态保持一致：从代码调用本方法时也要同步 UI，
+        # 否则会出现「日志已经展开了，勾选框还是空的」。
+        box = getattr(self, "_log_verbose_box", None)
+        if box is not None and box.isChecked() != enabled:
+            box.blockSignals(True)
+            box.setChecked(enabled)
+            box.blockSignals(False)
+        self._log_view.clear()
+        for stamp, message, kind in self._log_entries:
+            if kind == "detail" and not enabled:
+                continue
+            self._render_log(stamp, message, kind)
         bar = self._log_view.verticalScrollBar()
         bar.setValue(bar.maximum())
+
+    def log_verbose(self) -> bool:
+        return self._log_verbose
+
+    def clear_logs(self) -> None:
+        """清空日志：缓存一起清，否则切回「显示遥测」会把旧条目又渲染出来。"""
+        self._log_entries.clear()
+        self._log_view.clear()
 
     # ---------- 交互 ----------
     def _on_search_changed(self, text: str) -> None:

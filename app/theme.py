@@ -530,6 +530,40 @@ QLineEdit#SearchBox:focus {
     background: @surface;
 }
 
+/* QWidget 定了全局样式后，QCheckBox 也切换成 QSS 绘制；此时若不给
+   indicator 定义样式，Qt 会画成一个纯色方块，勾没勾都长一样。
+   这里显式画出空心/实心两种状态。 */
+QCheckBox {
+    background: transparent;
+    color: @text;
+    spacing: 7px;
+}
+QCheckBox::indicator {
+    width: 15px;
+    height: 15px;
+    border: 1px solid @text_3;
+    border-radius: 4px;
+    background: @surface_2;
+}
+QCheckBox::indicator:hover {
+    border-color: @accent_line;
+}
+QCheckBox::indicator:checked {
+    background: @accent;
+    border-color: @accent;
+}
+QCheckBox::indicator:checked:hover {
+    background: @accent_hover;
+    border-color: @accent_hover;
+}
+QCheckBox:disabled {
+    color: @text_3;
+}
+QCheckBox::indicator:disabled {
+    background: @surface_3;
+    border-color: @border_soft;
+}
+
 QComboBox {
     background: @surface_2;
     color: @text;

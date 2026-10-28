@@ -189,12 +189,16 @@ class HuaweiSmartLifeClient:
         return self._api.execute_scene(session, scene_id, home_id)
 
     # ============ MQTT 控制 ============
-    def connect_mqtt(self) -> None:
-        """登录消息中心 + 解析云端路由 + 建立 MQTT 连接。"""
+    def connect_mqtt(self, capture: bool = False) -> None:
+        """登录消息中心 + 解析云端路由 + 建立 MQTT 连接。
+
+        capture=True 会额外订阅通配主题，收到账号下所有客户端的消息——
+        只在排查协议时开，日常保持关闭。
+        """
         session = self.ensure_valid()
         self._message_session = self._api.login_message_center(session)
         self._route = self._api.select_cloud_route(session)
-        self._mqtt.connect(session, self._route)
+        self._mqtt.connect(session, self._route, capture=capture)
 
     @property
     def is_mqtt_connected(self) -> bool:

@@ -606,6 +606,95 @@ def main() -> int:
     check("通知里带的是设备渠道", notified[-1].kind == CHALLENGE_KIND_DEVICE)
     page.reset()
 
+    # ---- 23. 遥测中文化（回归：日志里全是原始 JSON）----
+    from app.telemetry_text import describe_query, describe_telemetry  # noqa: E402
+
+    names = {"dev-heater": "热水器"}
+    name_of = lambda dev_id: names.get(dev_id, "")  # noqa: E731
+
+    telemetry = describe_telemetry(
+        {
+            "body": {
+                "devId": "dev-heater",
+                "services": [{"sid": "power", "data": {"current": 1717}}],
+            }
+        },
+        name_of,
+    )
+    check("遥测摘要带设备名", "热水器" in telemetry)
+    check("遥测摘要翻译属性名", "电流" in telemetry)
+    check("遥测摘要带单位", "1717mA" in telemetry)
+    check("遥测摘要不再是 JSON", "{" not in telemetry and "services" not in telemetry)
+
+    # 服务名已经包含属性名时不再重复：「视频开关 开关 关」→「视频开关 关」
+    video = describe_telemetry(
+        {
+            "body": {
+                "devId": "dev-unknown",
+                "services": [{"sid": "videoSwitch", "data": {"on": 0}}],
+            }
+        },
+        name_of,
+    )
+    check("服务名与属性名不重复", "开关 开关" not in video)
+    check("开关值翻译成开/关", video.endswith("关"))
+
+    # 空字符串字段是"未设置"，不该占位置
+    visit = describe_telemetry(
+        {
+            "body": {
+                "devId": "dev-unknown",
+                "services": [
+                    {"sid": "visitPoint5", "data": {"move": 0, "enable": 0, "name": "", "id": ""}}
+                ],
+            }
+        },
+        name_of,
+    )
+    check("空字段被跳过", "—" not in visit)
+    check("访客点翻译成中文", "访客点" in visit)
+
+    # 查询响应：不再把 UUID 整条路径打到界面
+    query = describe_query("/devices/6bcc4cab-33d6/services/gateway/ntwk/WlanBasic", 5)
+    check("查询响应翻成中文路径", "网关" in query and "WiFi 信息" in query)
+    check("查询响应带条数", "5 项" in query)
+    check("查询响应不再出现设备 UUID", "6bcc4cab" not in query)
+
+    unknown = describe_telemetry({"body": {"devId": "abcdefgh-1234", "services": []}}, name_of)
+    check("未知设备退化成短 ID", "abcdefgh" in unknown)
+    check("无法解析的报文不抛异常", "无法解析" in describe_telemetry({"bad": 1}, name_of))
+
+    # ---- 24. 运行日志按级别折叠（遥测默认不显示）----
+    board = window.dashboard
+    board.clear_logs()
+    board.set_log_verbose(False)
+    board.append_log("已连接实时通道", "info")
+    board.append_log("[遥测] 热水器 · 电源 电流 1717mA", "detail")
+    visible = board._log_view.toPlainText()
+    check("普通日志照常显示", "已连接实时通道" in visible)
+    check("遥测默认折叠", "1717mA" not in visible)
+
+    board.set_log_verbose(True)
+    check("勾选后显示遥测", "1717mA" in board._log_view.toPlainText())
+
+    board.set_log_verbose(False)
+    check("取消勾选后遥测再次隐藏", "1717mA" not in board._log_view.toPlainText())
+    check("切换筛选不影响普通日志", "已连接实时通道" in board._log_view.toPlainText())
+
+    board.clear_logs()
+    check("清空日志同时清缓存", not board._log_entries)
+    check("清空后视图为空", not board._log_view.toPlainText())
+
+    # ---- 25. 协议调试订阅（默认关闭，可切换）----
+    ctrl = window.controller
+    check("协议调试默认关闭", ctrl._capture_enabled is False)
+    ctrl.set_capture_enabled(True, reconnect=False)
+    check("可开启协议调试", ctrl._capture_enabled is True)
+    ctrl.set_capture_enabled(False, reconnect=False)
+    check("可关闭协议调试", ctrl._capture_enabled is False)
+    # 未连接实时通道时切换不应触发重连（否则会打网络请求）
+    check("未连接时不触发重连", ctrl._mqtt_connected is False)
+
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")
     return 0

@@ -81,8 +81,18 @@ class HuaweiMqttController:
     def is_connected(self) -> bool:
         return self._connected and self._client is not None
 
-    def connect(self, session: AuthSession, route: SmartHomeCloudRoute) -> None:
-        """使用云端路由与鉴权信息连接 MQTT Broker。"""
+    def connect(
+        self,
+        session: AuthSession,
+        route: SmartHomeCloudRoute,
+        capture: bool = False,
+    ) -> None:
+        """使用云端路由与鉴权信息连接 MQTT Broker。
+
+        capture=True 时额外订阅 ``signaltrans/#`` 通配主题（协议调试用）：
+        会把整个账号下**所有客户端**的消息都收进来，包括官方 App 发出的查询，
+        日常使用没必要，默认关闭。
+        """
         if not route.smart_home_host or route.mqtt_port <= 0:
             raise MqttConfigurationError("MQTT Broker 地址不完整")
         settings = MqttConnectionSettings(
@@ -137,15 +147,16 @@ class HuaweiMqttController:
             self.disconnect()
             raise
 
-        # 旁听订阅（校准命令格式用）：通配捕获 signaltrans 下的真实命令。
+        # 旁听订阅（仅协议调试）：通配捕获 signaltrans 下的真实命令。
         # subscribe() 只是把 SUBSCRIBE 包入队，broker 若拒绝会异步体现在 on_subscribe，
         # 不会影响已建立的主连接与遥测推送，故此处失败仅告警。
-        for flt in MQTT_CAPTURE_FILTERS:
-            try:
-                client.subscribe(flt, settings.subscription_qos)
-                _LOGGER.info("已加入旁听订阅: %s", flt)
-            except Exception as error:  # noqa: BLE001
-                _LOGGER.warning("旁听订阅入队失败(忽略): %s: %s", flt, error)
+        if capture:
+            for flt in MQTT_CAPTURE_FILTERS:
+                try:
+                    client.subscribe(flt, settings.subscription_qos)
+                    _LOGGER.info("已加入旁听订阅: %s", flt)
+                except Exception as error:  # noqa: BLE001
+                    _LOGGER.warning("旁听订阅入队失败(忽略): %s: %s", flt, error)
 
     def _on_connect(self, _client, _userdata, _flags, reason_code, _properties) -> None:
         rc = _reason_code_value(reason_code)
