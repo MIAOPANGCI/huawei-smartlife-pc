@@ -688,11 +688,15 @@ def main() -> int:
 
     # ---- 25. 协议调试订阅（默认关闭，可切换）----
     ctrl = window.controller
-    check("协议调试默认关闭", ctrl._capture_enabled is False)
+    # 不假设初始值为 False：本机 ui_settings 里可能真的开着（用户排查时会开），
+    # 断言必须与环境无关，否则换台机器自检就红。
+    capture_initial = ctrl._capture_enabled
+    check("协议调试状态可读", isinstance(capture_initial, bool))
     ctrl.set_capture_enabled(True, reconnect=False)
     check("可开启协议调试", ctrl._capture_enabled is True)
     ctrl.set_capture_enabled(False, reconnect=False)
     check("可关闭协议调试", ctrl._capture_enabled is False)
+    ctrl.set_capture_enabled(capture_initial, reconnect=False)
     # 未连接实时通道时切换不应触发重连（否则会打网络请求）
     check("未连接时不触发重连", ctrl._mqtt_connected is False)
 
@@ -1020,7 +1024,8 @@ def main() -> int:
     )
 
     # ---- 32. 「运行日志显示原始协议报文」开关 ----
-    check("原始协议开关默认关闭", controller._raw_protocol is False)
+    raw_initial = controller._raw_protocol
+    check("原始协议状态可读", isinstance(raw_initial, bool))
 
     raw_payload = {
         "header": {"notifyType": "deviceDataChanged", "from": "data-manager"},
@@ -1049,6 +1054,53 @@ def main() -> int:
     clean_text = board._log_view.toPlainText()
     check("关闭后恢复中文摘要", "延迟" in clean_text or "数值" in clean_text)
     check("关闭后不再输出 JSON", '"notifyType"' not in clean_text)
+    controller.set_raw_protocol(raw_initial)
+
+    # ---- 33. 定时任务服务是数组，不能给输入框 ----
+    timer_dev = Device(
+        home_id="h1",
+        dev_id="dev-timer",
+        name="空调",
+        online=True,
+        services={
+            "timer": ServiceState(sid="timer", data={"timer": [], "num": 0}),
+            "delay": ServiceState(sid="delay", data={"num": 30}),
+        },
+    )
+    timer_specs = {spec.sid: spec for spec in device_spec.build_service_specs(timer_dev)}
+    check("数组型定时服务只读（给了输入框也设不了）", timer_specs["timer"].readonly is True)
+    check("纯数值的延迟仍可编辑", timer_specs["delay"].readonly is False)
+
+    # ---- 34. 原始协议里的密码必须打码 ----
+    from app.controller import _pretty_json  # noqa: E402
+
+    raw_json = _pretty_json(
+        {
+            "body": {
+                "WifiConfig": [{"WifiSsid": "X", "WpaPreSharedKey": "12345678"}],
+            },
+            "token": "abc",
+        }
+    )
+    check("WiFi 密码被打码", "12345678" not in raw_json)
+    check("打码位置占位可见", "***" in raw_json)
+    check("token 被打码", '"token": "***"' in raw_json)
+    check("非敏感字段保持原样", "WifiSsid" in raw_json)
+
+    # ---- 35. 访客点保留序号 ----
+    visit_text = describe_telemetry(
+        {
+            "body": {
+                "devId": "x",
+                "services": [
+                    {"sid": "visitPoint5", "data": {"move": 0}},
+                    {"sid": "visitPoint6", "data": {"move": 0}},
+                ],
+            }
+        },
+        lambda _d: "摄像头",
+    )
+    check("访客点保留序号可区分", "访客点5" in visit_text and "访客点6" in visit_text)
 
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")

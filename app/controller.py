@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Mapping
 
 from PySide6.QtCore import QObject, Signal
 
@@ -51,10 +51,43 @@ SESSION_PATH = os.path.join(APP_DIR, "session.json")
 UI_SETTINGS_PATH = os.path.join(APP_DIR, "ui_settings.json")
 
 
+# 路由器信息里会带 WiFi 密码明文，原始协议模式必须打码。
+# 排查协议不需要看密码，但日志一旦被截图/贴出去就是真泄露。
+_SENSITIVE_KEYS: frozenset[str] = frozenset(
+    {
+        "wpapresharedkey",
+        "wpapresharedkeytemp",
+        "wepkey",
+        "password",
+        "passwd",
+        "pwd",
+        "token",
+        "accesstoken",
+        "refreshtoken",
+    }
+)
+
+
+def _mask_sensitive(value: Any) -> Any:
+    """递归把敏感字段的值替换成 ***。"""
+    if isinstance(value, Mapping):
+        return {
+            key: (
+                "***"
+                if str(key).strip().lower() in _SENSITIVE_KEYS
+                else _mask_sensitive(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_mask_sensitive(item) for item in value]
+    return value
+
+
 def _pretty_json(payload: Any) -> str:
-    """原始协议显示用：缩进两格的 JSON。"""
+    """原始协议显示用：缩进两格的 JSON（敏感字段已打码）。"""
     try:
-        return json.dumps(payload, ensure_ascii=False, indent=2)
+        return json.dumps(_mask_sensitive(payload), ensure_ascii=False, indent=2)
     except (TypeError, ValueError):
         return str(payload)
 

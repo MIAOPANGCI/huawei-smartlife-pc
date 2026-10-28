@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any, Callable, Mapping
 
 from .device_spec import humanize_key, translate_value, unit_of
@@ -71,8 +70,9 @@ def _service_label(service: Mapping[str, Any]) -> str:
     raw = str(service.get("sid") or service.get("st") or "").strip()
     if not raw:
         return "数据"
-    # visitPoint5 / visitPoint6 这种带序号尾巴的，去掉数字再翻译
-    return humanize_key(re.sub(r"\d+$", "", raw), kind="sid") or raw
+    # 保留序号：visitPoint5 / visitPoint6 都得叫「访客点5」「访客点6」，
+    # 否则一条遥测里两个访客点都显示成「访客点」，分不清是哪个
+    return humanize_key(raw, kind="sid") or raw
 
 
 def _describe_service(service: Mapping[str, Any]) -> str:

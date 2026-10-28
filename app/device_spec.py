@@ -403,6 +403,7 @@ _PROTO_LABELS: dict[str, str] = {
     "save": "累计",
     # 摄像头
     "shoot": "拍摄",
+    "direction": "方向",
     "shootswitch": "拍摄开关",
     "event": "事件",
     "alarmevent": "告警事件",
@@ -470,6 +471,7 @@ _PROTO_LABELS: dict[str, str] = {
     "save": "累计",
     # 摄像头
     "shoot": "拍摄",
+    "direction": "方向",
     "shootswitch": "拍摄开关",
     "event": "事件",
     "alarmevent": "告警事件",
@@ -891,6 +893,13 @@ def _build_service_spec(svc: ServiceState) -> ServiceSpec:
     readonly = (
         sid_low in READONLY_SERVICE_IDS or sid_low in READONLY_FLAG_KEYS
     )
+    # 定时类服务里如果带数组字段（真实设备是 {"timer": [], "num": 0}，
+    # 即任务列表 + 任务数），就不是"填个数字"能设置的。给输入框用户一点
+    # 设备就回 -12（参数不合法）。先只读展示，等做了任务列表界面再放开。
+    if sid_low in DURATION_KEYS and any(
+        isinstance(value, (list, tuple)) for value in data.values()
+    ):
+        readonly = True
     spec = ServiceSpec(sid=sid, label=humanize_key(sid, kind="sid"), readonly=readonly)
 
     for key, value in data.items():
