@@ -53,6 +53,7 @@ class SettingsDialog(QDialog):
     startup_view_changed = Signal(str)
     capture_changed = Signal(bool)
     device_advanced_changed = Signal(bool)
+    raw_protocol_changed = Signal(bool)
     logout_requested = Signal()
 
     def __init__(
@@ -62,6 +63,7 @@ class SettingsDialog(QDialog):
         startup_view: str = "all",
         capture_enabled: bool = False,
         device_advanced: bool = False,
+        raw_protocol: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -73,6 +75,7 @@ class SettingsDialog(QDialog):
         self._startup_view = startup_view
         self._capture_enabled = bool(capture_enabled)
         self._device_advanced = bool(device_advanced)
+        self._raw_protocol = bool(raw_protocol)
         self._build()
 
     def _build(self) -> None:
@@ -189,6 +192,19 @@ class SettingsDialog(QDialog):
         advanced_hint.setWordWrap(True)
         layout.addWidget(advanced_hint)
 
+        self._raw_box = QCheckBox("运行日志显示原始协议报文")
+        self._raw_box.setChecked(self._raw_protocol)
+        self._raw_box.toggled.connect(self._on_raw_protocol_toggled)
+        layout.addWidget(self._raw_box)
+
+        raw_hint = QLabel(
+            "开启后运行日志直接输出 MQTT 原始 JSON（含 header / body 全部字段），"
+            "不再翻译成中文摘要。排查协议、对照官方 App 时用。"
+        )
+        raw_hint.setObjectName("Caption")
+        raw_hint.setWordWrap(True)
+        layout.addWidget(raw_hint)
+
         self._capture_box = QCheckBox("协议调试订阅（收到账号下所有 MQTT 消息）")
         self._capture_box.setChecked(self._capture_enabled)
         self._capture_box.toggled.connect(self._on_capture_toggled)
@@ -286,6 +302,10 @@ class SettingsDialog(QDialog):
     def _on_device_advanced_toggled(self, checked: bool) -> None:
         self._device_advanced = bool(checked)
         self.device_advanced_changed.emit(self._device_advanced)
+
+    def _on_raw_protocol_toggled(self, checked: bool) -> None:
+        self._raw_protocol = bool(checked)
+        self.raw_protocol_changed.emit(self._raw_protocol)
 
     def _on_capture_toggled(self, checked: bool) -> None:
         self._capture_enabled = bool(checked)

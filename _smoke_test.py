@@ -17,6 +17,7 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app import device_spec, dispatch  # noqa: E402
@@ -1017,6 +1018,37 @@ def main() -> int:
         "没有电源服务时不乱认主开关",
         device_spec.find_switch_service(no_power) is None,
     )
+
+    # ---- 32. 「运行日志显示原始协议报文」开关 ----
+    check("原始协议开关默认关闭", controller._raw_protocol is False)
+
+    raw_payload = {
+        "header": {"notifyType": "deviceDataChanged", "from": "data-manager"},
+        "body": {
+            "devId": "dev-heater",
+            "services": [{"sid": "delay", "data": {"num": 1, "enable": 0}}],
+        },
+    }
+    board.clear_logs()
+    board.set_log_verbose(True)
+
+    controller.set_raw_protocol(True)
+    check("开启后状态同步", controller._raw_protocol is True)
+    controller._on_mqtt_message("/smartHome/signaltrans/v2/categories/command", raw_payload)
+    # 日志经 dispatch 投递到主线程，得让事件循环跑一轮
+    QTest.qWait(150)
+    raw_text = board._log_view.toPlainText()
+    check("原始模式输出完整 JSON", '"notifyType"' in raw_text and '"services"' in raw_text)
+    check("原始模式保留缩进", "\n" in raw_text)
+    check("原始模式不再翻译成中文摘要", "空调" not in raw_text)
+
+    board.clear_logs()
+    controller.set_raw_protocol(False)
+    controller._on_mqtt_message("/smartHome/signaltrans/v2/categories/command", raw_payload)
+    QTest.qWait(150)
+    clean_text = board._log_view.toPlainText()
+    check("关闭后恢复中文摘要", "延迟" in clean_text or "数值" in clean_text)
+    check("关闭后不再输出 JSON", '"notifyType"' not in clean_text)
 
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")

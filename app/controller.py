@@ -51,6 +51,14 @@ SESSION_PATH = os.path.join(APP_DIR, "session.json")
 UI_SETTINGS_PATH = os.path.join(APP_DIR, "ui_settings.json")
 
 
+def _pretty_json(payload: Any) -> str:
+    """原始协议显示用：缩进两格的 JSON。"""
+    try:
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError):
+        return str(payload)
+
+
 def friendly_error(error: BaseException) -> str:
     """把异常翻译成用户能看懂的中文。"""
     if isinstance(error, TransientNetworkError):
@@ -105,6 +113,8 @@ class AppController(QObject):
         # 协议调试：订阅 signaltrans/# 通配，能收到账号下所有客户端的消息。
         # 默认关闭（由主窗口按 UI 设置注入），开启后日志会明显变吵。
         self._capture_enabled = False
+        # 运行日志输出原始 MQTT 报文（而非中文摘要），排查协议时开
+        self._raw_protocol = False
         self._scenes: list[Scene] = []
         self._busy_count = 0
         self._build_client()
@@ -491,6 +501,20 @@ class AppController(QObject):
 
         run_async(work, done, failed)
 
+    def set_raw_protocol(self, enabled: bool) -> None:
+        """开关「日志显示原始协议报文」。只影响显示，不影响收发。"""
+        enabled = bool(enabled)
+        if enabled == self._raw_protocol:
+            return
+        self._raw_protocol = enabled
+        self._emit(
+            self.log,
+            "已开启原始协议显示：日志将输出完整 MQTT 报文，不再翻译。"
+            if enabled
+            else "已关闭原始协议显示，日志恢复中文摘要。",
+            "warning" if enabled else "info",
+        )
+
     def set_capture_enabled(self, enabled: bool, reconnect: bool = True) -> None:
         """开关「协议调试订阅」。
 
@@ -607,31 +631,40 @@ class AppController(QObject):
             size = len(body) if isinstance(body, (list, dict)) else 0
             if method == "GET":
                 # 官方 App / 网关的查询响应（旁听到的），只留可读路径
-                self._emit(self.log, f"【查询】{describe_query(from_uri, size)}", "info")
+                if self._raw_protocol:
+                    self._emit(self.log, f"【查询】{_pretty_json(payload)}", "info")
+                else:
+                    self._emit(self.log, f"【查询】{describe_query(from_uri, size)}", "info")
             else:
                 self._emit(self.log, f"【命令响应】{describe_query(from_uri, size)}", "info")
             return
 
         if notify_type == "deviceDataChanged":
             # 遥测记为 detail：界面默认折叠，勾选「显示遥测」才出现
-            self._emit(
-                self.log,
-                f"[遥测] {describe_telemetry(payload, self._device_display_name)}",
-                "detail",
-            )
+            if self._raw_protocol:
+                text = f"[遥测] {_pretty_json(payload)}"
+            else:
+                text = f"[遥测] {describe_telemetry(payload, self._device_display_name)}"
+            self._emit(self.log, text, "detail")
             result = self.store.apply_telemetry(payload)
             if result is not None:
                 self._emit(self.device_changed, result[0])
             return
 
         if notify_type == "deviceStatus":
-            self._emit(self.log, f"[状态] {describe_query(topic, 0).replace('（0 项）', '')}", "tag")
+            if self._raw_protocol:
+                self._emit(self.log, f"[状态] {_pretty_json(payload)}", "tag")
+            else:
+                self._emit(self.log, f"[状态] {describe_query(topic, 0).replace('（0 项）', '')}", "tag")
             result = self.store.apply_device_status(payload)
             if result is not None and result[1]:
                 self._emit(self.device_changed, result[0])
             return
 
-        self._emit(self.log, f"[消息] {topic}", "tag")
+        if self._raw_protocol:
+            self._emit(self.log, f"[消息] {topic} {_pretty_json(payload)}", "tag")
+        else:
+            self._emit(self.log, f"[消息] {topic}", "tag")
 
     def _on_command_response(
         self,

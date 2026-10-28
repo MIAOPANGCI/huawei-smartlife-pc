@@ -188,7 +188,7 @@ HUAWEI-SMARTLIFE-PC/
 ├── run.bat                    # 一键启动（自检依赖，pythonw 后台运行）
 ├── run.vbs                    # 无窗口启动（双击即可）
 ├── requirements.txt
-├── _smoke_test.py             # 无头自检（191 项）
+├── _smoke_test.py             # 无头自检（198 项）
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
 │   ├── constants.py           # 域名 / App 标识 / REST 路径 / MQTT 参数
@@ -322,7 +322,9 @@ python _smoke_test.py     # 无需显示环境、不联网
 - 查询响应也翻成可读路径：`【查询】网关 · 网络 · WiFi 信息（5 项）`，
   不再把 `/devices/<uuid>/services/...` 整条打出来；
 - 遥测默认**折叠**，勾选日志页右上角「显示遥测」才展开；
-- 信封原文降级到 `app.log` 的 DEBUG 级，需要时把日志级别调低即可。
+- 想直接看原始报文：**设置 → 诊断 → 运行日志显示原始协议报文**。打开后
+  日志改为输出完整 MQTT JSON（缩进两格、保留层级），并自动展开遥测；
+  关掉即恢复中文摘要。只影响显示，不影响收发。
 
 > 翻译逻辑在 `app/telemetry_text.py`，不依赖 Qt，可单独测（自检里有 24 条覆盖）。
 

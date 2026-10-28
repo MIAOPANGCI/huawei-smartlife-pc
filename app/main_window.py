@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         self.controller.set_capture_enabled(
             bool(self._settings.get("capture_telemetry")), reconnect=False
         )
+        self.controller.set_raw_protocol(bool(self._settings.get("raw_protocol")))
 
         # 启动后异步尝试恢复会话，避免卡住首屏
         QTimer.singleShot(120, self._bootstrap)
@@ -556,6 +557,7 @@ class MainWindow(QMainWindow):
             self._settings.get("startup_view", "all"),
             capture_enabled=bool(self._settings.get("capture_telemetry")),
             device_advanced=bool(self._settings.get("device_advanced")),
+            raw_protocol=bool(self._settings.get("raw_protocol")),
             parent=self,
         )
         dialog.mode_changed.connect(self._set_mode)
@@ -563,8 +565,24 @@ class MainWindow(QMainWindow):
         dialog.startup_view_changed.connect(self._set_startup_view)
         dialog.capture_changed.connect(self._set_capture)
         dialog.device_advanced_changed.connect(self._set_device_advanced)
+        dialog.raw_protocol_changed.connect(self._set_raw_protocol)
         dialog.logout_requested.connect(self.controller.logout)
         dialog.exec()
+
+    def _set_raw_protocol(self, enabled: bool) -> None:
+        """日志显示原始报文：存盘、通知控制器，并把遥测展开。
+
+        不展开的话，原始报文都记在「遥测」档里，用户开了开关却还是看不到。
+        """
+        self._settings["raw_protocol"] = bool(enabled)
+        self._save_settings()
+        self.controller.set_raw_protocol(bool(enabled))
+        if enabled:
+            self.dashboard.set_log_verbose(True)
+        self.toast.show_toast(
+            "日志已改为输出原始报文" if enabled else "日志已恢复中文摘要",
+            "warning" if enabled else "info",
+        )
 
     def _set_capture(self, enabled: bool) -> None:
         """协议调试开关：存盘并让控制器重连以应用新的订阅范围。"""

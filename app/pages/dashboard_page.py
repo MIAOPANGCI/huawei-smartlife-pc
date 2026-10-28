@@ -129,6 +129,19 @@ class SceneCard(QFrame):
         layout.addWidget(button, 0, Qt.AlignLeft)
 
 
+def _escape_keep_indent(text: str) -> str:
+    """转义 HTML 并保留行首缩进。
+
+    HTML 会把连续空格折叠成一个，原始协议那种缩进 JSON 贴进日志就成一坨了。
+    """
+    lines: list[str] = []
+    for line in str(text).split("\n"):
+        stripped = line.lstrip(" ")
+        indent = len(line) - len(stripped)
+        lines.append("&nbsp;" * indent + html.escape(stripped) if indent else html.escape(line))
+    return "<br/>".join(lines)
+
+
 class DashboardPage(QWidget):
     """主看板。"""
 
@@ -673,7 +686,7 @@ class DashboardPage(QWidget):
             "tag": palette.accent,
             "detail": palette.text_3,
         }.get(kind, palette.text_2)
-        safe = html.escape(message).replace("\n", "<br/>")
+        safe = _escape_keep_indent(message)
         self._log_view.appendHtml(
             f'<span style="color:{palette.text_3}">{stamp}</span> '
             f'<span style="color:{color}">{safe}</span>'
