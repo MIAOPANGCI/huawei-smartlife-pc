@@ -320,6 +320,19 @@ class DeviceDialog(QDialog):
         self._raw_body_edit = QLineEdit()
         self._raw_body_edit.setPlaceholderText("可选：直接覆盖整个 body（JSON）")
         row3.addWidget(self._raw_body_edit, 1)
+
+        # 排查下发格式时最省事的一步：先照抄设备当前值原样发一次，
+        # 确认「这个服务到底能不能写」，再逐字段改。
+        # 手抄 timer 那种嵌套数组太容易差一个字段。
+        self._fill_button = QPushButton("填入当前值")
+        self._fill_button.setObjectName("Ghost")
+        self._fill_button.setToolTip(
+            "把选中服务当前上报的 data 原样填进上面输入框，\n"
+            "便于先原样下发确认可写，再改单个字段试"
+        )
+        self._fill_button.clicked.connect(self._fill_current_data)
+        row3.addWidget(self._fill_button)
+
         self._send_button = QPushButton("发送命令")
         self._send_button.setObjectName("Primary")
         self._send_button.clicked.connect(self._on_send_command)
@@ -825,6 +838,34 @@ class DeviceDialog(QDialog):
 
     def _send(self, sid: str, data: dict, overrides: dict | None = None) -> None:
         self.command_requested.emit(self._device.dev_id, sid, data, overrides or {})
+
+    def _fill_current_data(self) -> None:
+        """把选中服务当前上报的 data 原样填进输入框。
+
+        排查"为什么设备拒绝"的第一步应该是原样照抄：如果连设备自己上报的值
+        发回去都被拒，问题就不在字段内容，而在通道或权限上。
+        """
+        label = self._svc_combo.currentText()
+        sid = getattr(self, "_svc_labels", {}).get(label, label)
+        service = None
+        if sid:
+            service = self._device.services.get(sid)
+            if service is None:
+                for key, item in self._device.services.items():
+                    if key.lower() == sid.lower():
+                        service = item
+                        break
+        if service is None or not service.data:
+            self._data_edit.setText("{}")
+            self._hint.setText("该服务当前没有可填入的数据。")
+            return
+        text = json.dumps(dict(service.data), ensure_ascii=False)
+        self._data_edit.setText(text)
+        # 单行框放不下 timer 那种嵌套数组，光标归零至少让开头可见，
+        # 完整内容挂在 tooltip 上，方便核对字段有没有抄错。
+        self._data_edit.setCursorPosition(0)
+        self._data_edit.setToolTip(text)
+        self._hint.setText("已填入该服务当前上报的 data，可改一个字段后发送。")
 
     def _on_send_command(self) -> None:
         label = self._svc_combo.currentText()

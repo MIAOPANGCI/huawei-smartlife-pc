@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -1136,6 +1137,24 @@ def main() -> int:
     check("默认视图能看到定时任务", "定时任务" in timer_labels)
     check("定时任务不给编辑控件", "switch" not in {prop.sid for prop, _row in timer_dialog._rows})
     timer_dialog.close()
+
+    # ---- 37. 命令面板「填入当前值」：原样照抄设备上报的 data ----
+    fill_dialog = DeviceDialog(ac_device, window, show_advanced=True)
+    for index in range(fill_dialog._svc_combo.count()):
+        label = fill_dialog._svc_combo.itemText(index)
+        if fill_dialog._svc_labels.get(label) == "timer":
+            fill_dialog._svc_combo.setCurrentIndex(index)
+            break
+    fill_dialog._fill_current_data()
+    filled = fill_dialog._data_edit.text()
+    check("填入当前值带出定时数组", '"timer"' in filled and '"num"' in filled)
+    try:
+        filled_ok = isinstance(json.loads(filled), dict)
+    except ValueError:
+        filled_ok = False
+    check("填入的内容是合法 JSON 对象", filled_ok)
+    check("填入后光标在开头（能看见字段名）", fill_dialog._data_edit.cursorPosition() == 0)
+    fill_dialog.close()
 
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")

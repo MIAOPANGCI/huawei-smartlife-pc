@@ -188,7 +188,7 @@ HUAWEI-SMARTLIFE-PC/
 ├── run.bat                    # 一键启动（自检依赖，pythonw 后台运行）
 ├── run.vbs                    # 无窗口启动（双击即可）
 ├── requirements.txt
-├── _smoke_test.py             # 无头自检（212 项）
+├── _smoke_test.py             # 无头自检（215 项）
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
 │   ├── constants.py           # 域名 / App 标识 / REST 路径 / MQTT 参数
@@ -305,6 +305,9 @@ python _smoke_test.py     # 无需显示环境、不联网
               "start": "160046Z", "end": "160546Z", "id": 1, "sid": "switch"}],
    "num": 1}
   ```
+
+  下发面板里有「填入当前值」，可把设备上报的 data 一键填进输入框——排查
+  下发格式时先原样照抄一次，能区分「字段写错」和「这个服务根本不能写」。
 
   含义是「start 到 end 之间，把 sid 服务的 para 属性设为 paraValue」，
   是一个时间窗 + 动作。`describe_timer_tasks()` 把它翻成
