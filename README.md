@@ -122,6 +122,11 @@ Windows 桌面端的华为智慧生活控制程序：华为账号登录（含会
 这样避免了两件事：一是把 `rssi=-52`、`voltage=220` 这种排查用的数字摆在
 日常界面上；二是误触「通用命令下发」直接往设备发原始报文。
 
+**滑块不吃滚轮**：详情窗放在滚动区里，用户想滚页面时鼠标很容易掠过滑块，
+而 Qt 默认会让滚轮改值——这个界面上滑块一动就等于往设备发命令（把空调从 26℃
+调到 30℃ 只差一次误滚）。现在滚轮事件被转给外层滚动区，页面照常滚、参数不动
+（`app/widgets/no_wheel.py`）。
+
 ## 安装与运行
 
 要求 Python 3.10+，且该解释器能安装 PySide6（已在 3.13 / 3.15 上验证）。
@@ -179,7 +184,7 @@ HUAWEI-SMARTLIFE-PC/
 ├── run.bat                    # 一键启动（自检依赖，pythonw 后台运行）
 ├── run.vbs                    # 无窗口启动（双击即可）
 ├── requirements.txt
-├── _smoke_test.py             # 无头自检（148 项）
+├── _smoke_test.py             # 无头自检（153 项）
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
 │   ├── constants.py           # 域名 / App 标识 / REST 路径 / MQTT 参数
@@ -219,6 +224,7 @@ HUAWEI-SMARTLIFE-PC/
         ├── glyph_icons.py     # 界面图标（自绘）+ 应用/托盘图标
         ├── mini_card.py       # 紧凑设备卡（托盘面板与挂件共用）
         ├── rounded_surface.py # 抗锯齿圆角面板（托盘浮层 / 挂件外壳）
+        ├── no_wheel.py        # 不吃滚轮的滑块/下拉框（防误触改设备）
         ├── labels.py          # 自动省略的长文本标签
         └── toast.py           # 轻提示
 ```

@@ -745,6 +745,76 @@ def main() -> int:
     check("电量属于日常指标，默认保留", "battery" in watch_keys)
     watch_dialog.close()
 
+    # ---- 28. 滑块不吃滚轮（详情窗滚动时容易把设备调了）----
+    from PySide6.QtCore import QPoint, QPointF  # noqa: E402
+    from PySide6.QtGui import QWheelEvent  # noqa: E402
+    from PySide6.QtWidgets import (  # noqa: E402
+        QLabel,
+        QScrollArea,
+        QSlider,
+        QVBoxLayout,
+        QWidget,
+    )
+
+    from app.widgets.no_wheel import NoWheelSlider  # noqa: E402
+
+    def wheel_event(delta: int = -120) -> QWheelEvent:
+        return QWheelEvent(
+            QPointF(5, 5),
+            QPointF(5, 5),
+            QPoint(0, 0),
+            QPoint(0, delta),
+            Qt.NoButton,
+            Qt.NoModifier,
+            Qt.NoScrollPhase,
+            False,
+        )
+
+    # 对照组：证明这个测试确实能测出「滚轮改值」
+    plain = QSlider(Qt.Horizontal)
+    plain.setRange(0, 100)
+    plain.setValue(50)
+    QApplication.sendEvent(plain, wheel_event())
+    check("对照：普通滑块会被滚轮改值", plain.value() != 50)
+
+    safe = NoWheelSlider(Qt.Horizontal)
+    safe.setRange(0, 100)
+    safe.setValue(50)
+    QApplication.sendEvent(safe, wheel_event())
+    check("详情窗滑块不受滚轮影响", safe.value() == 50)
+
+    # 滚轮要转给外层滚动区，否则用户滚页面就完全没反应
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    holder = QWidget()
+    holder_layout = QVBoxLayout(holder)
+    for index in range(30):
+        holder_layout.addWidget(QLabel(f"占位 {index}"))
+    inner = NoWheelSlider(Qt.Horizontal)
+    inner.setRange(0, 100)
+    inner.setValue(50)
+    holder_layout.addWidget(inner)
+    area.setWidget(holder)
+    area.resize(220, 120)
+    area.show()
+    app.processEvents()
+    bar = area.verticalScrollBar()
+    bar.setValue(0)
+    before_scroll = bar.value()
+    QApplication.sendEvent(inner, wheel_event())
+    app.processEvents()
+    check("滚轮转给滚动区，页面真的滚动", bar.value() > before_scroll)
+    check("转发后滑块值仍然不变", inner.value() == 50)
+    area.close()
+
+    # 详情窗里的滑块必须都是这个版本
+    slider_dialog = DeviceDialog(controller.store.get("dev-ac"), window)
+    check(
+        "详情窗滑块已换成无滚轮版本",
+        all(isinstance(item, NoWheelSlider) for item in slider_dialog.findChildren(QSlider)),
+    )
+    slider_dialog.close()
+
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")
     return 0

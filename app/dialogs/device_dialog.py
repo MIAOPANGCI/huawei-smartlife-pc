@@ -20,7 +20,6 @@ import json
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -30,7 +29,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSlider,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -53,6 +51,7 @@ from ..device_spec import (
 )
 from ..theme import theme
 from ..widgets.controls import SwitchButton
+from ..widgets.no_wheel import NoWheelComboBox, NoWheelSlider
 
 # 用户能直接操作的控件类型。默认视图只保留这些，
 # 加上下面白名单里的少数只读指标。
@@ -276,7 +275,7 @@ class DeviceDialog(QDialog):
         row1 = QHBoxLayout()
         row1.setSpacing(8)
         row1.addWidget(self._mini_label("服务"))
-        self._svc_combo = QComboBox()
+        self._svc_combo = NoWheelComboBox()
         self._svc_combo.setMinimumWidth(140)
         row1.addWidget(self._svc_combo, 1)
         row1.addWidget(self._mini_label("data (JSON)"))
@@ -618,7 +617,7 @@ class DeviceDialog(QDialog):
         minimum = int(round(prop.minimum * scale))
         maximum = int(round(prop.maximum * scale))
 
-        slider = QSlider(Qt.Horizontal)
+        slider = NoWheelSlider(Qt.Horizontal)
         slider.setRange(minimum, maximum)
         slider.setSingleStep(1)
         slider.setValue(int(round(float(prop.value) * scale)))
