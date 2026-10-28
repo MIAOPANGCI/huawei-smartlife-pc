@@ -182,6 +182,12 @@ def main() -> int:
 
     devices = list(controller.store.all())
 
+    # 文档图要可复现：不受本机 ui_settings 影响。
+    # 之前这里读到了用户真实的 device_advanced=true，生成的详情截图一直是
+    # 高级模式，别人 clone 下来跑又是另一个样子。
+    window._settings["device_advanced"] = False
+    window._settings["startup_view"] = "all"
+
     # ---- 设备详情：挑净化器（开关 + 5 个属性，界面最完整）----
     target = next(item for item in devices if item.dev_id == "demo-purifier")
     window._open_device(target.dev_id)

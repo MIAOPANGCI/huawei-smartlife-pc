@@ -15,26 +15,10 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Mapping
 
-from .device_spec import humanize_key, translate_value
+from .device_spec import humanize_key, translate_value, unit_of
 
-# 值带单位的字段。华为的电流单位是 mA（1717 = 1.7A），功率是 W。
-_UNITS: dict[str, str] = {
-    "current": "mA",
-    "power": "W",
-    "loadpower": "W",
-    "voltage": "V",
-    "temperature": "°C",
-    "ambienttemp": "°C",
-    "targettemp": "°C",
-    "humidity": "%",
-    "brightness": "%",
-    "battery": "%",
-    "rssi": "dBm",
-    "electricity": "kWh",
-    "totalelectricity": "kWh",
-    "pm25": "μg/m³",
-    "co2": "ppm",
-}
+# 单位统一由 device_spec.unit_of() 提供（与设备详情共用一份）
+
 
 # 这些键的 0/1 是开关语义，不要显示成数字
 _SWITCH_KEYS = frozenset(
@@ -70,7 +54,7 @@ def _format_value(key: str, value: Any) -> str:
     if isinstance(value, (int, float)):
         if low in _SWITCH_KEYS and value in (0, 1):
             return "开" if value else "关"
-        unit = _UNITS.get(low, "")
+        unit = unit_of(low)
         text = f"{value:g}" if isinstance(value, float) else str(value)
         return f"{text}{unit}"
     if isinstance(value, str):

@@ -85,11 +85,66 @@ READONLY_NUMERIC_KEYS: frozenset[str] = frozenset(
         "powerconsumption",
         "voltage",
         "current",
+        "currenttemp",
+        "currenttemperature",
         "energy",
         "frequency",
         "signal",
         "rssi",
         "snr",
+        # 「电量」（Electric）在热水器/插座上都是上报值，不会让你调
+        "electric",
+        "power",
+        "load",
+        "maximum",
+        "minimum",
+        "total",
+    }
+)
+
+# 时长类：用输入框而不是滑块。
+# 定时 / 倒计时 / 延时的取值范围通常是几百到几万（秒或分钟），
+# 滑块既拖不准、也看不出具体数值，官方 App 里同样是点开填数字。
+DURATION_KEYS: frozenset[str] = frozenset(
+    {
+        "delay",
+        "delaytime",
+        "timer",
+        "timing",
+        "countdown",
+        "remainingtime",
+        "remaintime",
+        "resttime",
+        "lefttime",
+        "ontime",
+        "offtime",
+        "worktime",
+        "appointment",
+    }
+)
+
+# 值为 0/1、但语义是「能力 / 鉴权 / 故障」这类标志位：只能看，不能给开关。
+# 给成开关会让人以为"能把鉴权关掉"，点一下反而下发一条无意义命令。
+READONLY_FLAG_KEYS: frozenset[str] = frozenset(
+    {
+        "ctlcapability",
+        "capability",
+        "capabilities",
+        "auth",
+        "kitauth",
+        "authentication",
+        "authorized",
+        "support",
+        "supported",
+        "bound",
+        "pairing",
+        "error",
+        "errorcode",
+        "fault",
+        "faultcode",
+        "alarm",
+        "online",
+        "connected",
     }
 )
 
@@ -314,6 +369,21 @@ _PROTO_LABELS: dict[str, str] = {
     "wlanbasic": "WiFi 信息",
     "channelinfo": "信道信息",
     "childhomepage": "子设备页面",
+    "child": "儿童",
+    "childlockswitch": "童锁开关",
+    "currenttemp": "当前温度",
+    "currenttemperature": "当前温度",
+    "powerwatts": "实时功率",
+    "watt": "瓦特",
+    "watts": "瓦特",
+    "ctl": "控制",
+    "capability": "能力",
+    "kit": "配网",
+    "auth": "鉴权",
+    "electric": "电量",
+    "delay": "延迟",
+    "timer": "定时",
+    "timing": "定时",
     "hostinfo": "主机信息",
     "system": "系统",
     "upgrade": "升级",
@@ -428,6 +498,38 @@ _ENUM_VALUES: dict[str, str] = {
 }
 
 
+# 数值单位。设备详情和遥测摘要共用同一份，避免两处各写一套。
+UNIT_BY_KEY: dict[str, str] = {
+    "current": "mA",
+    "power": "W",
+    "powerwatts": "W",
+    "loadpower": "W",
+    "voltage": "V",
+    "temperature": "°C",
+    "currenttemp": "°C",
+    "currenttemperature": "°C",
+    "ambienttemp": "°C",
+    "targettemp": "°C",
+    "settemp": "°C",
+    "humidity": "%",
+    "brightness": "%",
+    "battery": "%",
+    "rssi": "dBm",
+    "snr": "dB",
+    "electric": "kW·h",
+    "electricity": "kW·h",
+    "totalelectricity": "kW·h",
+    "energy": "kW·h",
+    "pm25": "μg/m³",
+    "co2": "ppm",
+}
+
+
+def unit_of(key: object) -> str:
+    """数值字段的单位；没有对应单位就返回空串（不瞎猜）。"""
+    return UNIT_BY_KEY.get(str(key).strip().lower(), "")
+
+
 def translate_value(value: object) -> str:
     """把协议枚举值翻成中文；认不出来原样返回，绝不改写设备名等内容。"""
     if not isinstance(value, str):
@@ -522,9 +624,13 @@ def device_initial(device: Device) -> str:
 def _is_boolish(key: str, value: object) -> bool:
     if isinstance(value, bool):
         return True
-    return isinstance(value, int) and str(key).lower() in {
-        k.lower() for k in SWITCH_KEYS
-    }
+    if not isinstance(value, int) or isinstance(value, bool):
+        return False
+    # 值域也必须是 0/1。只看键名的话，功率上报（``power: 1717``）会被当成
+    # 开关渲染出来，用户看到的开关状态还是「未知」，点一下还可能把功率写回去。
+    if value not in (0, 1):
+        return False
+    return str(key).lower() in {k.lower() for k in SWITCH_KEYS}
 
 
 def switch_state_of(value: object) -> str:
@@ -711,6 +817,22 @@ def _build_service_spec(svc: ServiceState) -> ServiceSpec:
                 spec.properties.append(
                     PropertySpec(sid, key, label, KIND_READONLY_NUMBER, value)
                 )
+            elif kl in DURATION_KEYS:
+                # 时长类（定时 / 倒计时 / 延时）：范围通常几百到几万，
+                # 滑块既拖不准也没法表示具体分钟数，给个输入框回车下发。
+                spec.properties.append(PropertySpec(sid, key, label, KIND_TEXT, value))
+            elif value in (0, 1) and not _has_range_meta(data):
+                # 0/1 且没给范围：这是开关或标志位，不是"可调数值"。
+                # 用滑块表示 0/1 毫无意义（拖一格就跨完整个取值范围），
+                # 实际界面上就是一排长得一模一样的小红点，还特别容易误触。
+                if kl in READONLY_FLAG_KEYS:
+                    spec.properties.append(
+                        PropertySpec(sid, key, label, KIND_READONLY_NUMBER, value)
+                    )
+                else:
+                    spec.properties.append(
+                        PropertySpec(sid, key, label, KIND_TOGGLE, bool(value))
+                    )
             else:
                 minimum, maximum, step, is_int = infer_range(data, value)
                 spec.properties.append(

@@ -188,7 +188,7 @@ HUAWEI-SMARTLIFE-PC/
 ├── run.bat                    # 一键启动（自检依赖，pythonw 后台运行）
 ├── run.vbs                    # 无窗口启动（双击即可）
 ├── requirements.txt
-├── _smoke_test.py             # 无头自检（161 项）
+├── _smoke_test.py             # 无头自检（179 项）
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
 │   ├── constants.py           # 域名 / App 标识 / REST 路径 / MQTT 参数
@@ -288,7 +288,18 @@ python _smoke_test.py     # 无需显示环境、不联网
 - `powerElectricity` 服务的 `power` 是**实时功率**，不是电源开关，下发会被拒绝  
   （`errcode=-201`），甚至误触发场景；
 - 多开关设备（热水器 `indicator` + `switch`）必须先排除附属开关再选主电源；
-- 没有 `min/max` 元数据且值超出 0–100 的数值视为累计统计量，只读展示。
+- 没有 `min/max` 元数据且值超出 0–100 的数值视为累计统计量，只读展示；
+- **值为 0/1 且没给范围的一律当开关**（`childLockSwitch`、`indicator`），
+  用滑块表示 0/1 毫无意义——拖一格就跨完整个取值范围，界面上就是一排
+  长得一模一样的小红点，还特别容易误触；
+- 但值为 0/1 的**能力/鉴权/故障标志位**（`ctlCapability`、`kitAuth`）是只读的，
+  给成开关会让人以为"能把鉴权关掉"，点一下就是一条无意义的下发；
+- **时长类**（`timer` / `delay` / `countdown`）用输入框而不是滑块：取值范围
+  通常是几百到几万（秒或分钟），滑块既拖不准也看不出具体数值；
+- 数值一律带单位（`45°C`、`0kW·h`、`-52dBm`），单位表在 `device_spec.unit_of()`，
+  与运行日志的遥测摘要共用一份；没有对应单位的字段不瞎加。
+- `power` 这个键尤其要看值：`power: 1` 是电源开关，`power: 1717` 是实时功率（W）。
+  只看键名会把功率渲染成一个「未知状态」的开关，点一下还可能把 1717 写回去。
 
 这些规则集中在 `app/device_spec.py`，改协议适配只需动一个文件。
 

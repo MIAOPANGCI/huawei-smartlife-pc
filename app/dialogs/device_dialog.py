@@ -48,6 +48,7 @@ from ..device_spec import (
     ServiceSpec,
     format_number,
     translate_value,
+    unit_of,
 )
 from ..theme import theme
 from ..widgets.controls import SwitchButton
@@ -593,9 +594,12 @@ class DeviceDialog(QDialog):
             layout.addWidget(widget, 1)
         elif prop.kind == KIND_TEXT:
             edit = QLineEdit(str(prop.value))
-            edit.setFixedWidth(180)
+            edit.setFixedWidth(120)
+            edit.setPlaceholderText("输入后回车")
             edit.returnPressed.connect(
-                lambda s=prop.sid, k=prop.key, e=edit: self._send(s, {k: e.text().strip()})
+                lambda s=prop.sid, k=prop.key, p=prop, e=edit: self._send(
+                    s, {k: self._coerce_text_value(p, e.text())}
+                )
             )
             widget = edit
             layout.addWidget(widget, 0, Qt.AlignRight)
@@ -608,7 +612,7 @@ class DeviceDialog(QDialog):
             layout.addWidget(widget, 1)
         else:  # 只读文本 / 数值
             text = (
-                format_number(prop.value)
+                f"{format_number(prop.value)}{unit_of(prop.key)}"
                 if prop.kind == KIND_READONLY_NUMBER
                 else translate_value(prop.value)
             )
@@ -640,7 +644,7 @@ class DeviceDialog(QDialog):
 
         value_label = QLabel(self._format_slider_value(prop, slider.value() / scale))
         value_label.setObjectName("Value")
-        value_label.setFixedWidth(52)
+        value_label.setFixedWidth(66)
         value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         def on_change(raw: int) -> None:
@@ -663,10 +667,35 @@ class DeviceDialog(QDialog):
         return box
 
     @staticmethod
+    def _coerce_text_value(prop: PropertySpec, text: str) -> object:
+        """输入框按原值类型提交。
+
+        定时 / 倒计时这类字段在协议里是整数秒，原样把字符串 ``"30"`` 发上去
+        设备多半不认（或者当成非法值）。这里按当前值的类型还原一下。
+        """
+        text = str(text).strip()
+        if isinstance(prop.value, bool):
+            return {"true": 1, "false": 0}.get(text.lower(), text)
+        if isinstance(prop.value, int):
+            try:
+                return int(float(text))
+            except ValueError:
+                return text
+        if isinstance(prop.value, float):
+            try:
+                return float(text)
+            except ValueError:
+                return text
+        return text
+
+    @staticmethod
     def _format_slider_value(prop: PropertySpec, value: float) -> str:
         if prop.is_int:
-            return str(int(round(value)))
-        return f"{value:.2f}".rstrip("0").rstrip(".")
+            text = str(int(round(value)))
+        else:
+            text = f"{value:.2f}".rstrip("0").rstrip(".")
+        # 只写「45」看不出是度还是档位，带上单位
+        return f"{text}{unit_of(prop.key)}"
 
     def _update_values(self, specs: list[ServiceSpec]) -> None:
         """结构未变时，仅同步控件值（不重建，避免打断拖动）。"""

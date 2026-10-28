@@ -863,6 +863,103 @@ def main() -> int:
         window._settings = original_settings
         window._device_dialog = None
 
+    # ---- 30. 控件类型：哪些该是开关/只读/输入框，而不是滑块 ----
+    # 真实热水器上报的那一批字段（对着截图逐条核过）
+    probe = Device(
+        home_id="h1",
+        dev_id="dev-probe",
+        name="热水器",
+        online=True,
+        services={
+            "heater": ServiceState(
+                sid="heater",
+                data={
+                    "childLockSwitch": 0,
+                    "ctlCapability": 1,
+                    "delay": 0,
+                    "electric": 0,
+                    "indicator": 1,
+                    "kitAuth": 1,
+                    "timer": 0,
+                    "targetTemp": 45,
+                    "currentTemp": 38,
+                    "power": 1717,
+                },
+            )
+        },
+    )
+    kinds = {
+        prop.key: prop.kind
+        for spec in device_spec.build_service_specs(probe)
+        for prop in spec.properties
+    }
+    labels = {
+        prop.key: prop.label
+        for spec in device_spec.build_service_specs(probe)
+        for prop in spec.properties
+    }
+
+    check("0/1 的童锁是开关", kinds.get("childLockSwitch") == "toggle")
+    check("0/1 的指示灯是开关", kinds.get("indicator") == "toggle")
+    check("能力标志位只读而不是开关", kinds.get("ctlCapability") == "readonly_number")
+    check("鉴权标志位只读", kinds.get("kitAuth") == "readonly_number")
+    check("电量只读", kinds.get("electric") == "readonly_number")
+    check("功率上报不被当成开关", kinds.get("power") == "readonly_number")
+    check("当前温度只读", kinds.get("currentTemp") == "readonly_number")
+    check("定时用输入框而不是滑块", kinds.get("timer") == "text")
+    check("延迟用输入框而不是滑块", kinds.get("delay") == "text")
+    check("可调温度仍是滑块", kinds.get("targetTemp") == "slider")
+
+    check("童锁翻译成中文", labels.get("childLockSwitch") == "童锁开关")
+    check("能力字段翻译成中文", labels.get("ctlCapability") == "控制能力")
+    check("鉴权字段翻译成中文", labels.get("kitAuth") == "配网鉴权")
+    check("currentTemp 不译成「电流温度」", labels.get("currentTemp") == "当前温度")
+
+    # 输入框提交要还原成数字类型，否则设备收到的是字符串
+    timer_prop = device_spec.PropertySpec(
+        sid="heater", key="timer", label="定时", kind="text", value=0
+    )
+    check(
+        "输入框按整数下发",
+        DeviceDialog._coerce_text_value(timer_prop, " 30 ") == 30,
+    )
+    check(
+        "非数字输入原样下发，不抛异常",
+        DeviceDialog._coerce_text_value(timer_prop, "abc") == "abc",
+    )
+
+    # 数值要带单位，否则「45」看不出是摄氏度还是档位
+    temp_prop = device_spec.PropertySpec(
+        sid="heater",
+        key="targetTemp",
+        label="目标温度",
+        kind="slider",
+        value=45,
+        minimum=30,
+        maximum=75,
+        step=1,
+        is_int=True,
+    )
+    check(
+        "滑块数值带单位",
+        DeviceDialog._format_slider_value(temp_prop, 45) == "45°C",
+    )
+    no_unit_prop = device_spec.PropertySpec(
+        sid="heater",
+        key="ctlCapability",
+        label="控制能力",
+        kind="slider",
+        value=1,
+        minimum=0,
+        maximum=5,
+        step=1,
+        is_int=True,
+    )
+    check(
+        "没有单位的字段不瞎加",
+        DeviceDialog._format_slider_value(no_unit_prop, 1) == "1",
+    )
+
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")
     return 0
