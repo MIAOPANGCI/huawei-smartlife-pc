@@ -1,13 +1,13 @@
 # 华为智慧生活 PC 控制台
 
-![version](https://img.shields.io/badge/version-1.1.0-blue)
+![version](https://img.shields.io/badge/version-1.2.0-blue)
 
 Windows 桌面端的华为智慧生活控制程序：华为账号登录（含会话保持）、设备列表、  
 状态查询与基本控制（开关 / 亮度 / 温度 / 模式等）。GUI 使用 **PySide6 (Qt 6) + QSS**，  
 窗口结构、设备卡片与状态面板参考 [MiHome-Windows](https://github.com/huanyuejue/MiHome-Windows)。
 
 **不想装 Python？** 直接下 [Releases](../../releases) 里的
-`HuaweiSmartLife-1.1.0-win64.zip`，解压双击 `HuaweiSmartLife.exe` 即可（约 100 MB，
+`HuaweiSmartLife-1.2.0-win64.zip`，解压双击 `HuaweiSmartLife.exe` 即可（约 100 MB，
 自带运行时）。之后在设置里点「检查更新」就能直接升级到新版本。
 
 > ⚠️ **非官方项目**：与华为技术有限公司无任何关联，未获其授权或认可。
