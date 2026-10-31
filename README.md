@@ -232,6 +232,16 @@ exe 的文件属性、zip 文件名都从它派生。发版流程就是改那一
 为什么用 onedir 而不是 onefile：onefile 每次启动都要把上百 MB 解压到临时目录，
 冷启动要多等好几秒；onedir 双击即开，反正发布时都要压 zip。
 
+发布到 GitHub Release：
+
+```bash
+py -3 packaging/publish_release.py     # 需要 git 凭据里的 repo 权限
+```
+
+脚本从 git 凭据管理器取 token（只在内存里用，不落盘），按 `version.py` 的版本号
+创建 tag 对应的 release 并上传 zip。默认走本机 `127.0.0.1:7897` 代理
+（GitHub 直连国内基本不通），换环境时设 `RELEASE_PROXY` 覆盖。
+
 > `launcher/` 里那个 8.9 MB 的**启动器**是另一回事：它是"源码运行 + 开机自启动"时
 > 用来让任务管理器显示应用名的转发器，发布包里不包含它，也不需要它。
 
@@ -280,7 +290,8 @@ HUAWEI-SMARTLIFE-PC/
 │   ├── make_icon.py           # 把代码画的图标导出成多尺寸 .ico
 │   └── build.py               # 打包脚本（py -3 launcher/build.py）
 ├── packaging/
-│   └── build_release.py       # 打包完整应用（onedir + zip），版本号取自 version.py
+│   ├── build_release.py       # 打包完整应用（onedir + zip），版本号取自 version.py
+│   └── publish_release.py     # 创建 GitHub Release 并上传 zip
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
 │   ├── version.py             # 版本号唯一来源（界面 / exe 属性 / tag 都从这里来）
