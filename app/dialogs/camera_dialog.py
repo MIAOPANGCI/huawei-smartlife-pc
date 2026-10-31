@@ -157,6 +157,19 @@ class _FrameGrabber(QThread):
                     pass
 
 
+class FrameGrabber(_FrameGrabber):
+    """给外部（挂件的快捷预览浮层）用的公开名字。
+
+    两个窗口看的是同一路流，读帧参数（缓冲区只留最新帧、断流阈值）必须一致，
+    所以只导出而不是各写一份——复制出去的版本迟早会跟这边跑偏。
+    """
+
+
+def have_opencv() -> bool:
+    """公开别名：外部判断能不能内嵌播放，不必自己 import cv2 试一遍。"""
+    return _have_opencv()
+
+
 def _read_first_frame(url: str) -> tuple[int, int] | None:
     """打开流读一帧，返回 (宽, 高)；失败或没画面返回 None。"""
     import cv2
@@ -269,11 +282,17 @@ class _StreamProbe(QThread):
 class VideoView(QWidget):
     """等比居中绘制一帧画面，四周留黑边。"""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        minimum: tuple[int, int] = (600, 338),
+    ) -> None:
         super().__init__(parent)
         self._image: QImage | None = None
         self._hint = "尚未连接"
-        self.setMinimumSize(600, 338)
+        # 完整窗口需要大画面；挂件的快捷预览是小浮层，尺寸得由调用方定
+        self.setMinimumSize(*minimum)
         self.setAttribute(Qt.WA_OpaquePaintEvent)
         self.setCursor(Qt.ArrowCursor)
 

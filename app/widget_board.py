@@ -62,6 +62,8 @@ class WidgetBoard(QWidget):
     power_requested = Signal(str)
     state_changed = Signal(dict)      # {locked, collapsed, x, y, edge}
     devices_edit_requested = Signal()  # 自选设备 / 排序
+    camera_requested = Signal()        # 标题栏相机按钮：快捷看实时画面
+    board_hidden = Signal()            # 挂件被收起（× 按钮 / 程序调用）
 
     def __init__(
         self,
@@ -87,6 +89,7 @@ class WidgetBoard(QWidget):
         self._peeked = False                # 当前是否缩在屏幕外
         self._expanded_pos: QPoint | None = None
         self._away_ms = 0                   # 鼠标已离开多久（累计）
+        self._edge_paused = False           # 画面浮层开着时别缩回，免得用户找不着入口
         self._anim: QPropertyAnimation | None = None
         self._animating = False
         self._devices: list[Device] = []
@@ -144,6 +147,13 @@ class WidgetBoard(QWidget):
         self._title.setObjectName("BoardTitle")
         self._title.setMinimumWidth(90)
         layout.addWidget(self._title, 1)
+
+        # 没有摄像头设备 / 一台都没配置时不显示——按钮点开只有一句
+        # "没有可看的摄像头"，那就是假入口
+        self._camera_btn = self._icon_button("camera", "实时画面")
+        self._camera_btn.clicked.connect(self.camera_requested.emit)
+        self._camera_btn.hide()
+        layout.addWidget(self._camera_btn)
 
         self._edit_btn = self._icon_button("sliders", "自选设备与排序")
         self._edit_btn.clicked.connect(self._on_edit_devices)
@@ -297,6 +307,19 @@ class WidgetBoard(QWidget):
     def peeked(self) -> bool:
         return self._peeked
 
+    def set_camera_available(self, available: bool) -> None:
+        """有没有可看的摄像头；没有就藏起相机按钮（不做点了报错的假入口）。"""
+        self._camera_btn.setVisible(bool(available))
+
+    def set_edge_hide_paused(self, paused: bool) -> None:
+        """暂停 / 恢复贴边自动缩回。
+
+        画面浮层从挂件上弹出来时挂件一直缩回去，用户想切摄像头就得先去
+        屏幕边缘把挂件勾出来，等于每次都多一步。
+        """
+        self._edge_paused = bool(paused)
+        self._away_ms = 0
+
     # ==================================================================
     # 拖动
     # ==================================================================
@@ -436,7 +459,7 @@ class WidgetBoard(QWidget):
 
     def _poll_cursor(self) -> None:
         """轮询全局光标：碰到窄边就滑出，移开久了就缩回。"""
-        if self._edge is None or not self.isVisible():
+        if self._edge is None or not self.isVisible() or self._edge_paused:
             return
         if self._animating or self._drag_offset is not None:
             return
@@ -487,6 +510,8 @@ class WidgetBoard(QWidget):
     def hideEvent(self, event) -> None:  # noqa: N802 - Qt 接口
         super().hideEvent(event)
         self._edge_timer.stop()
+        # 挂件都收起来了，从它弹出去的画面小窗也不该独留桌面上
+        self.board_hidden.emit()
 
     def moveEvent(self, event) -> None:  # noqa: N802 - Qt 接口
         super().moveEvent(event)

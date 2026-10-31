@@ -55,6 +55,7 @@ class SettingsDialog(QDialog):
     capture_changed = Signal(bool)
     device_advanced_changed = Signal(bool)
     raw_protocol_changed = Signal(bool)
+    camera_default_changed = Signal(str)
     logout_requested = Signal()
 
     def __init__(
@@ -66,6 +67,8 @@ class SettingsDialog(QDialog):
         device_advanced: bool = False,
         raw_protocol: bool = False,
         motion_enabled: bool = True,
+        cameras: list[tuple[str, str]] | None = None,
+        camera_default: str = "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -79,6 +82,9 @@ class SettingsDialog(QDialog):
         self._device_advanced = bool(device_advanced)
         self._raw_protocol = bool(raw_protocol)
         self._motion_enabled = bool(motion_enabled)
+        # (显示名, key)：key 是设备 dev_id，手动接入的那台固定为 "manual"
+        self._cameras = cameras or []
+        self._camera_default = camera_default
         self._build()
 
     def _build(self) -> None:
@@ -186,6 +192,44 @@ class SettingsDialog(QDialog):
         divider_startup.setObjectName("Divider")
         divider_startup.setFixedHeight(1)
         layout.addWidget(divider_startup)
+
+        # ---- 桌面挂件 ----
+        layout.addWidget(self._section("桌面挂件"))
+        self._camera_combo = QComboBox()
+        self._camera_combo.setMinimumWidth(220)
+        self._camera_combo.addItem("跟随上次查看的那台", "")
+        for label, key in self._cameras:
+            self._camera_combo.addItem(label, key)
+        current_index = 0
+        for index in range(self._camera_combo.count()):
+            if str(self._camera_combo.itemData(index)) == self._camera_default:
+                current_index = index
+                break
+        self._camera_combo.setCurrentIndex(current_index)
+        self._camera_combo.currentIndexChanged.connect(self._on_camera_default_changed)
+        if not self._cameras:
+            self._camera_combo.setEnabled(False)
+
+        camera_row = QHBoxLayout()
+        camera_row.setSpacing(10)
+        camera_label = QLabel("相机按钮默认看")
+        camera_label.setObjectName("Body")
+        camera_row.addWidget(camera_label, 0)
+        camera_row.addWidget(self._camera_combo, 1)
+        layout.addLayout(camera_row)
+
+        camera_hint = QLabel(
+            "挂件标题栏的相机按钮点开就看这台；选「跟随上次查看」则用你最后切到的那台"
+            "（在主界面点过某台的实时画面也算）。"
+        )
+        camera_hint.setObjectName("Caption")
+        camera_hint.setWordWrap(True)
+        layout.addWidget(camera_hint)
+
+        divider_board = QFrame()
+        divider_board.setObjectName("Divider")
+        divider_board.setFixedHeight(1)
+        layout.addWidget(divider_board)
 
         # ---- 诊断 ----
         layout.addWidget(self._section("诊断"))
@@ -330,6 +374,11 @@ class SettingsDialog(QDialog):
         key = self._startup_combo.itemData(index)
         if isinstance(key, str):
             self.startup_view_changed.emit(key)
+
+    def _on_camera_default_changed(self, index: int) -> None:
+        # 空串 = 跟随上次查看，是有意义的值，所以不像启动项那样跳过空值
+        key = self._camera_combo.itemData(index)
+        self.camera_default_changed.emit("" if key is None else str(key))
 
     def _on_logout(self) -> None:
         self.logout_requested.emit()

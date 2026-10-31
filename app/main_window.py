@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .camera_popup import CameraPopup
 from .controller import APP_DIR, UI_SETTINGS_PATH, AppController, friendly_error
 from . import device_spec
 from .dialogs.camera_dialog import CameraDialog
@@ -53,6 +54,8 @@ class MainWindow(QMainWindow):
         self._device_dialog: DeviceDialog | None = None
         # 每台摄像头一个独立窗口：客厅和门口可以同时看，不互相顶掉
         self._camera_dialogs: dict[str, CameraDialog] = {}
+        # 挂件旁的快捷画面浮层（懒加载，关闭后保留实例，下次直接重连）
+        self._camera_popup: CameraPopup | None = None
         self._settings: dict = self._load_settings()
         self._startup_pending = False
         self._quit_requested = False
@@ -168,6 +171,8 @@ class MainWindow(QMainWindow):
         self.board.power_requested.connect(self._on_power_requested)
         self.board.state_changed.connect(self._on_board_state_changed)
         self.board.devices_edit_requested.connect(self._edit_board_devices)
+        self.board.camera_requested.connect(self._toggle_camera_popup)
+        self.board.board_hidden.connect(self._on_board_hidden)
 
         self.tray.show()
 
@@ -211,6 +216,115 @@ class MainWindow(QMainWindow):
 
     def _sync_board_devices(self) -> None:
         self.board.set_devices(self._ordered_devices("board_devices", require_switch=True))
+        # 相机按钮跟着摄像头数量走：一台都没有就藏起来，不制造点开只会报错的入口
+        self.board.set_camera_available(bool(self._camera_targets()))
+        if self._camera_popup is not None and self._camera_popup.isVisible():
+            self._camera_popup.set_targets(self._camera_targets())
+
+    # ---------- 挂件旁的快捷实时画面 ----------
+    def _camera_targets(self) -> list[dict]:
+        """挂件浮层能看的摄像头，已填地址的排前面。
+
+        没填地址的也带上：设备在，用户点开就是「去配置」的引导，
+        比在挂件上找不到入口强。但已配置的必须排前面，否则每次点开
+        先是空白引导，看画面还要再切一次。
+        """
+        from huawei_smartlife.camera import filter_cameras
+
+        targets: list[dict] = [
+            {
+                "key": device.dev_id,
+                "name": device.name or "摄像头",
+                "config": self._camera_config(device.dev_id),
+            }
+            for device in filter_cameras(self.controller.store.all())
+        ]
+
+        # 手动添加的那台不属于华为账号，但一样能看，配置存在 cameras["manual"]
+        manual = self._camera_config("manual")
+        if str(manual.get("host") or "").strip():
+            targets.append(
+                {"key": "manual", "name": "网络摄像头", "config": manual}
+            )
+
+        targets.sort(
+            key=lambda item: (
+                not str(item["config"].get("host") or "").strip(),  # 已配置的在前
+                item["key"] == "manual",                           # 华为设备优先于手动接入
+                item["name"],
+            )
+        )
+        return targets
+
+    def _toggle_camera_popup(self) -> None:
+        popup = self._camera_popup
+        if popup is not None and popup.isVisible():
+            popup.hide()
+            return
+
+        targets = self._camera_targets()
+        if not targets:
+            self.toast.show_toast(
+                "还没有摄像头：可在主界面点相机图标手动接入", "info"
+            )
+            return
+
+        if popup is None:
+            popup = CameraPopup()
+            popup.configure_requested.connect(self._on_camera_popup_configure)
+            popup.target_changed.connect(self._remember_camera)
+            popup.closed.connect(self._on_camera_popup_closed)
+            self._camera_popup = popup
+
+        # 上次看的那台：不靠名字排序去猜，猜不准
+        popup.set_targets(targets, preferred=self._camera_last_key())
+        # 贴着挂件弹，挂件常贴右边，所以浮层会落在它左侧
+        popup.show_for(self.board.frameGeometry())
+        self.board.set_edge_hide_paused(True)
+
+    def _camera_last_key(self) -> str:
+        """挂件相机按钮默认看哪台。
+
+        设置里点明了就固定那台（"跟随上次查看"为空串时走记忆）。拿名字或
+        排序去猜"用户大概想看哪台"是猜不准的，所以给了明确选择。
+        """
+        fixed = str(self._settings.get("camera_default") or "")
+        if fixed:
+            return fixed
+        return str(self._settings.get("board_camera") or "")
+
+    def _remember_camera(self, key: str) -> None:
+        if not key or self._settings.get("board_camera") == key:
+            return
+        self._settings["board_camera"] = key
+        self._save_settings()
+
+    def _set_camera_default(self, key: str) -> None:
+        """设置里的「相机按钮默认看」：空串表示跟随上次查看。"""
+        self._settings["camera_default"] = key
+        self._save_settings()
+        if not key:
+            self.toast.show_toast("相机按钮将跟随上次查看的那台", "info")
+            return
+        name = next(
+            (item["name"] for item in self._camera_targets() if str(item["key"]) == key),
+            "该摄像头",
+        )
+        self.toast.show_toast(f"相机按钮默认打开：{name}", "info")
+
+    def _on_camera_popup_configure(self, key: str) -> None:
+        if key == "manual":
+            self._open_manual_camera()
+        else:
+            self._open_camera(key)
+
+    def _on_camera_popup_closed(self) -> None:
+        self.board.set_edge_hide_paused(False)
+
+    def _on_board_hidden(self) -> None:
+        """挂件收起来了，挂在它身上的画面小窗一并收起。"""
+        if self._camera_popup is not None and self._camera_popup.isVisible():
+            self._camera_popup.hide()
 
     def _show_tray_panel(self) -> None:
         from PySide6.QtGui import QCursor
@@ -517,6 +631,8 @@ class MainWindow(QMainWindow):
     # ---------- 摄像头实时画面 ----------
     def _open_camera(self, dev_id: str) -> None:
         """打开（或聚焦）某台摄像头的实时画面窗口。"""
+        # 在主界面看过哪台，挂件的相机按钮就该默认给哪台
+        self._remember_camera(dev_id)
         existing = self._camera_dialogs.get(dev_id)
         if existing is not None and existing.isVisible():
             existing.raise_()
@@ -584,11 +700,17 @@ class MainWindow(QMainWindow):
         cameras[dev_id] = dict(config)
         self._settings["cameras"] = cameras
         self._save_settings()
+        # 挂件那边的浮层可能正开着这台：配置改了就按新地址重连，
+        # 否则用户改完 IP 还得自己关掉浮层再点开
+        if self._camera_popup is not None:
+            self._camera_popup.reload_config(dev_id, config)
 
     def _close_camera_dialogs(self) -> None:
         for dialog in list(self._camera_dialogs.values()):
             dialog.close()
         self._camera_dialogs.clear()
+        if self._camera_popup is not None:
+            self._camera_popup.hide()
 
     def _close_device_dialog(self) -> None:
         if self._device_dialog is not None:
@@ -616,6 +738,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "tray_panel"):
             self.tray_panel.refresh_icons()
             self.board.refresh_icons()
+            if self._camera_popup is not None:
+                self._camera_popup.refresh_icons()
         self.login_page.apply_theme()
         # 自绘控件需要主动重绘
         for widget in self.findChildren(QWidget):
@@ -648,6 +772,8 @@ class MainWindow(QMainWindow):
             device_advanced=bool(self._settings.get("device_advanced")),
             raw_protocol=bool(self._settings.get("raw_protocol")),
             motion_enabled=bool(self._settings.get("motion", True)),
+            cameras=[(item["name"], str(item["key"])) for item in self._camera_targets()],
+            camera_default=str(self._settings.get("camera_default") or ""),
             parent=self,
         )
         dialog.mode_changed.connect(self._set_mode)
@@ -657,6 +783,7 @@ class MainWindow(QMainWindow):
         dialog.capture_changed.connect(self._set_capture)
         dialog.device_advanced_changed.connect(self._set_device_advanced)
         dialog.raw_protocol_changed.connect(self._set_raw_protocol)
+        dialog.camera_default_changed.connect(self._set_camera_default)
         dialog.logout_requested.connect(self.controller.logout)
         dialog.exec()
 
