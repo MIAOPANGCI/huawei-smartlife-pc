@@ -15,6 +15,7 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from PySide6.QtCore import QPoint  # noqa: E402
 from PySide6.QtWidgets import QApplication, QCheckBox  # noqa: E402
 
 from app import autostart, dispatch  # noqa: E402
@@ -144,6 +145,43 @@ def main() -> int:
     check("隐藏启动时窗口默认不显示", hidden.isVisible() is False)
     QTest.qWait(700)      # _bootstrap 用 120ms 延时 + 线程池回收
     check("没有会话时自动显示登录窗口", hidden.isVisible() is True)
+
+    # ---- 7. 启动时恢复上次的挂件 ----
+    hidden._settings["board_restore"] = True
+    hidden._settings["board"] = {"x": 120, "y": 90, "visible": True}
+    hidden._board_restored = False
+    hidden._restore_board()
+    app.processEvents()
+    check("上次开着 → 启动自动打开挂件", hidden.board.isVisible())
+    # 位置的恢复发生在 WidgetBoard 构造时（读 board.x/y），这里改配置不会重读，
+    # 那条路径由 _edge_check.py 覆盖
+
+    hidden.board.hide()
+    hidden._board_restored = False
+    hidden._settings["board"] = {"x": 120, "y": 90, "visible": False}
+    hidden._restore_board()
+    check("上次关着 → 启动不打开", not hidden.board.isVisible())
+
+    hidden._board_restored = False
+    hidden._settings["board"] = {"x": 120, "y": 90, "visible": True}
+    hidden._settings["board_restore"] = False
+    hidden._restore_board()
+    check("设置关掉后，上次开着也不弹出来", not hidden.board.isVisible())
+
+    # 点 × 关掉要记成"不想看"，退出时的隐藏则不能改这个状态
+    hidden._settings["board"] = {"visible": True}
+    hidden._remember_board_visible(False)
+    check("点 × 关掉会记成不可见", hidden._settings["board"].get("visible") is False)
+
+    # 挂件上报位置时不能把 visible 冲掉：_emit_state 的字典里没有这个字段
+    hidden._settings["board"] = {}
+    hidden._show_board()
+    check("打开挂件后记为可见", hidden._settings["board"].get("visible") is True)
+    hidden._on_board_state_changed(
+        {"x": 10, "y": 20, "locked": False, "collapsed": False, "edge": None}
+    )
+    check("上报位置不会把 visible 冲掉", hidden._settings["board"].get("visible") is True)
+
     hidden.close()
 
     print()

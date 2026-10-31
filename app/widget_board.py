@@ -56,6 +56,18 @@ def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
 
 
+def _parse_pos(x: object, y: object) -> QPoint | None:
+    """配置里存的坐标：不是数字就当没有。
+
+    bool 是 int 的子类，``True/False`` 混进来会变成 (1,0)，得单独挡掉。
+    """
+    if isinstance(x, bool) or isinstance(y, bool):
+        return None
+    if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+        return None
+    return QPoint(int(x), int(y))
+
+
 class WidgetBoard(QWidget):
     """桌面挂件窗口。"""
 
@@ -64,6 +76,7 @@ class WidgetBoard(QWidget):
     devices_edit_requested = Signal()  # 自选设备 / 排序
     camera_requested = Signal()        # 标题栏相机按钮：快捷看实时画面
     board_hidden = Signal()            # 挂件被收起（× 按钮 / 程序调用）
+    dismissed = Signal()               # 用户主动点 × 关掉（区别于退出时被动隐藏）
 
     def __init__(
         self,
@@ -86,6 +99,8 @@ class WidgetBoard(QWidget):
         self._collapsed = bool(state.get("collapsed", False))
         edge = state.get("edge")
         self._edge: str | None = edge if edge in EDGES else None
+        # 上次的位置：以前只存不读，导致每次重启挂件都回到右下角
+        self._saved_pos = _parse_pos(state.get("x"), state.get("y"))
         self._peeked = False                # 当前是否缩在屏幕外
         self._expanded_pos: QPoint | None = None
         self._away_ms = 0                   # 鼠标已离开多久（累计）
@@ -100,6 +115,11 @@ class WidgetBoard(QWidget):
         self._build_timers()
         self.refresh_icons()
         self._apply_state()
+        # 放到上次的位置。必须等 _apply_state 定完宽高再 move，
+        # 否则窗口按旧尺寸算坐标，贴右边时会差出几个像素
+        if self._saved_pos is not None:
+            self.move(self._saved_pos)
+            self._expanded_pos = self._saved_pos
 
     def _build_timers(self) -> None:
         # 无边框 Qt.Tool 窗口收不到可靠的 enter / leave（窗口大部分在屏幕外时
@@ -168,7 +188,7 @@ class WidgetBoard(QWidget):
         layout.addWidget(self._collapse_btn)
 
         close_btn = self._icon_button("close", "隐藏挂件")
-        close_btn.clicked.connect(self.hide)
+        close_btn.clicked.connect(self.close_by_user)
         layout.addWidget(close_btn)
 
         bar.mousePressEvent = self._bar_press      # type: ignore[method-assign]
@@ -310,6 +330,14 @@ class WidgetBoard(QWidget):
     def set_camera_available(self, available: bool) -> None:
         """有没有可看的摄像头；没有就藏起相机按钮（不做点了报错的假入口）。"""
         self._camera_btn.setVisible(bool(available))
+
+    def close_by_user(self) -> None:
+        """用户点 × 关掉挂件。
+
+        要和"程序退出时顺手隐藏"分开记：那种隐藏不该让下次启动不恢复挂件。
+        """
+        self.hide()
+        self.dismissed.emit()
 
     def set_edge_hide_paused(self, paused: bool) -> None:
         """暂停 / 恢复贴边自动缩回。
@@ -485,7 +513,7 @@ class WidgetBoard(QWidget):
             self._collapse_to_edge()
 
     def show_near(self, anchor: QWidget | None = None) -> None:
-        """首次显示时放到父窗口右下角上方；之后沿用保存的位置。"""
+        """显示挂件：贴在上次的边上，否则回到上次的位置，再没有就放右下角。"""
         screen = QGuiApplication.primaryScreen()
         available = screen.availableGeometry() if screen else self.rect()
         self._away_ms = 0
@@ -494,13 +522,21 @@ class WidgetBoard(QWidget):
             self._peeked = False
             self._expanded_pos = self._edge_anchor(self._edge, available)
             self.move(self._expanded_pos)
-        elif self.pos().x() < 0 or self.pos().y() < 0 or self.pos() == QPoint(0, 0):
-            self.move(
-                available.right() - self.width() - 40,
-                available.bottom() - self.height() - 80,
-            )
+        else:
+            self._place_initial(available)
         self.show()
         self.raise_()
+
+    def _place_initial(self, available: QRect) -> None:
+        """没有贴边时的位置：优先沿用上次的坐标。"""
+        target = self._saved_pos or QPoint(
+            available.right() - self.width() - 40,
+            available.bottom() - self.height() - 80,
+        )
+        # 换了分辨率 / 拔了副屏之后，旧坐标可能落在屏幕外，夹回来
+        x = _clamp(target.x(), available.left(), available.right() - self.width() + 1)
+        y = _clamp(target.y(), available.top(), available.bottom() - self.height() + 1)
+        self.move(x, y)
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt 接口
         super().showEvent(event)

@@ -65,6 +65,7 @@ class MainWindow(QMainWindow):
         self._settings: dict = self._load_settings()
         self._startup_pending = False
         self._quit_requested = False
+        self._board_restored = False      # 启动时只恢复一次挂件
 
         self.setWindowTitle("华为智慧生活 · PC 控制台")
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
@@ -179,6 +180,7 @@ class MainWindow(QMainWindow):
         self.board.devices_edit_requested.connect(self._edit_board_devices)
         self.board.camera_requested.connect(self._toggle_camera_popup)
         self.board.board_hidden.connect(self._on_board_hidden)
+        self.board.dismissed.connect(lambda: self._remember_board_visible(False))
 
         self.tray.show()
 
@@ -340,6 +342,17 @@ class MainWindow(QMainWindow):
             "info",
         )
 
+    def _set_board_restore(self, enabled: bool) -> None:
+        """设置里的「启动时恢复上次打开的桌面挂件」。"""
+        self._settings["board_restore"] = bool(enabled)
+        self._save_settings()
+        self.toast.show_toast(
+            "启动时将恢复上次打开的挂件"
+            if enabled
+            else "启动时不再自动打开挂件",
+            "info",
+        )
+
     def _on_update_ready(self, new_dir: str) -> None:
         """新版本已下载解压：确认后交给它替换文件，本进程随即退出。
 
@@ -391,6 +404,22 @@ class MainWindow(QMainWindow):
     def _show_board(self) -> None:
         self._sync_board_devices()
         self.board.show_near()
+        self._remember_board_visible(True)
+
+    def _restore_board(self) -> None:
+        """启动时按上次的状态恢复挂件。
+
+        只在设备列表加载完之后调一次：挂件要渲染卡片，早于数据只会闪一下空条。
+        """
+        if self._board_restored:
+            return
+        self._board_restored = True
+        if not bool(self._settings.get("board_restore", True)):
+            return
+        state = self._settings.get("board")
+        if not isinstance(state, dict) or not state.get("visible"):
+            return
+        self._show_board()
 
     # ---- 自选设备与排序 ----
     def _edit_tray_devices(self) -> None:
@@ -487,6 +516,22 @@ class MainWindow(QMainWindow):
         self._save_settings()
 
     def _on_board_state_changed(self, state: dict) -> None:
+        # 挂件上报的是位置/锁定/收起；visible 由主窗口自己维护（要区分
+        # 用户点 × 关掉和程序退出时隐藏），所以合并时要把它带上
+        previous = self._settings.get("board")
+        merged = dict(state)
+        if isinstance(previous, dict) and "visible" in previous:
+            merged["visible"] = previous["visible"]
+        self._settings["board"] = merged
+        self._save_settings()
+
+    def _remember_board_visible(self, visible: bool) -> None:
+        """记住挂件是开着还是被关掉，供下次启动决定要不要自动弹出来。"""
+        state = self._settings.get("board")
+        state = dict(state) if isinstance(state, dict) else {}
+        if state.get("visible") == visible:
+            return
+        state["visible"] = bool(visible)
         self._settings["board"] = state
         self._save_settings()
 
@@ -577,6 +622,8 @@ class MainWindow(QMainWindow):
 
         self._sync_tray_devices()
         self._sync_board_devices()
+        # 设备就绪后恢复上次的挂件（位置也一并恢复）
+        self._restore_board()
 
         # 首次加载完成后应用「启动时默认分类」
         if self._startup_pending:
@@ -825,6 +872,7 @@ class MainWindow(QMainWindow):
             motion_enabled=bool(self._settings.get("motion", True)),
             cameras=[(item["name"], str(item["key"])) for item in self._camera_targets()],
             camera_default=str(self._settings.get("camera_default") or ""),
+            board_restore=bool(self._settings.get("board_restore", True)),
             parent=self,
         )
         dialog.mode_changed.connect(self._set_mode)
@@ -835,6 +883,7 @@ class MainWindow(QMainWindow):
         dialog.device_advanced_changed.connect(self._set_device_advanced)
         dialog.raw_protocol_changed.connect(self._set_raw_protocol)
         dialog.camera_default_changed.connect(self._set_camera_default)
+        dialog.board_restore_changed.connect(self._set_board_restore)
         dialog.update_ready.connect(self._on_update_ready)
         dialog.autostart_changed.connect(
             lambda enabled: self._set_autostart(dialog, enabled)

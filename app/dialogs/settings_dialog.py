@@ -70,6 +70,7 @@ class SettingsDialog(QDialog):
     device_advanced_changed = Signal(bool)
     raw_protocol_changed = Signal(bool)
     camera_default_changed = Signal(str)
+    board_restore_changed = Signal(bool)
     autostart_changed = Signal(bool)
     update_ready = Signal(str)          # 新版本目录，由主窗口接手替换
     logout_requested = Signal()
@@ -85,6 +86,7 @@ class SettingsDialog(QDialog):
         motion_enabled: bool = True,
         cameras: list[tuple[str, str]] | None = None,
         camera_default: str = "",
+        board_restore: bool = True,
         autostart_enabled: bool | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -105,6 +107,7 @@ class SettingsDialog(QDialog):
         # (显示名, key)：key 是设备 dev_id，手动接入的那台固定为 "manual"
         self._cameras = cameras or []
         self._camera_default = camera_default
+        self._board_restore = bool(board_restore)
         # None = 问注册表要真实状态（设置项本身可能存在注册表里、不一定写过 settings）
         self._autostart_enabled = (
             autostart.is_enabled() if autostart_enabled is None else bool(autostart_enabled)
@@ -504,6 +507,17 @@ class SettingsDialog(QDialog):
             )
         )
 
+        self._board_restore_box = QCheckBox("启动时恢复上次打开的桌面挂件")
+        self._board_restore_box.setChecked(self._board_restore)
+        self._board_restore_box.setToolTip(
+            "上次挂着的话，启动后在原来的位置自动显示；点过挂件的 × 关掉就不再弹回来。"
+        )
+        self._board_restore_box.toggled.connect(self._on_board_restore_toggled)
+        layout.addWidget(self._board_restore_box)
+        layout.addWidget(
+            self._hint("挂件的位置、贴边状态、锁定与收起都会一并恢复。")
+        )
+
     # ---- 诊断 ----
     def _build_diagnosis(self, layout: QVBoxLayout) -> None:
         layout.addWidget(self._section("诊断"))
@@ -618,6 +632,10 @@ class SettingsDialog(QDialog):
         # 空串 = 跟随上次查看，是有意义的值，所以不像启动项那样跳过空值
         key = self._camera_combo.itemData(index)
         self.camera_default_changed.emit("" if key is None else str(key))
+
+    def _on_board_restore_toggled(self, checked: bool) -> None:
+        self._board_restore = bool(checked)
+        self.board_restore_changed.emit(self._board_restore)
 
     def _on_autostart_toggled(self, checked: bool) -> None:
         self._autostart_enabled = bool(checked)

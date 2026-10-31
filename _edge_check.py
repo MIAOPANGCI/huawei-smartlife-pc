@@ -132,6 +132,43 @@ def main() -> int:
     board.hide()
     board2.hide()
 
+    # ---- 10. 位置记忆 ----
+    saved = wb.WidgetBoard({"x": 320, "y": 240})
+    saved.show()
+    app.processEvents()
+    check("构造时恢复上次位置", saved.pos() == QPoint(320, 240))
+
+    saved.show_near()
+    app.processEvents()
+    check("显示时沿用保存位置（不跳回右下角）", saved.pos() == QPoint(320, 240))
+
+    outside = wb.WidgetBoard({"x": 9999, "y": 9999})
+    outside.show()
+    app.processEvents()
+    outside.show_near()
+    app.processEvents()
+    area = outside._screen_area()
+    check(
+        "越界坐标被夹回屏幕内",
+        area.left() <= outside.x()
+        and outside.x() + outside.width() <= area.right() + 1,
+    )
+    outside.hide()
+
+    # ---- 11. 点 × 关掉 vs 退出时隐藏 ----
+    dismissed: list[bool] = []
+    saved.dismissed.connect(lambda: dismissed.append(True))
+    saved.close_by_user()
+    app.processEvents()
+    check("点 × 会发出 dismissed", dismissed == [True])
+    check("点 × 后窗口隐藏", not saved.isVisible())
+
+    saved.show()
+    app.processEvents()
+    saved.hide()          # 模拟退出流程里的 board.hide()
+    app.processEvents()
+    check("退出时的隐藏不触发 dismissed", dismissed == [True])
+
     print()
     print(f"通过 {len(PASSES)} / {len(PASSES) + len(FAILS)}")
     if FAILS:
