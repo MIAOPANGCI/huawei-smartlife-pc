@@ -11,11 +11,11 @@ import logging
 import os
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from . import dispatch
+from . import autostart, dispatch
 from .controller import APP_DIR, UI_SETTINGS_PATH
 from .main_window import MainWindow
 from .theme import DEFAULT_ACCENT, set_theme
@@ -166,8 +166,35 @@ def _center_on_screen(window: MainWindow) -> None:
     )
 
 
+TRAY_FLAG = "--tray"
+
+
+def parse_launch_args(argv: list[str]) -> tuple[list[str], bool]:
+    """拆出启动参数：``--tray`` 表示只在托盘里待命（开机自启动用）。
+
+    这个参数不能留给 QApplication 解析，先摘掉再传进去。
+    """
+    args = [item for item in argv if item != TRAY_FLAG]
+    return args, len(args) != len(argv)
+
+
+def _migrate_autostart() -> None:
+    """把旧版写在注册表里的自启动项换成启动文件夹的快捷方式。
+
+    旧版那条在任务管理器里显示成「python」，用户认不出是谁。迁移失败不影响
+    运行（旧项继续生效），所以这里只记日志。
+    """
+    try:
+        if autostart.migrate():
+            _LOGGER.info("已把开机自启动项迁移为快捷方式")
+    except Exception:  # noqa: BLE001 - 迁移是锦上添花，不能影响启动
+        _LOGGER.debug("迁移开机自启动项失败", exc_info=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     """启动 GUI，返回进程退出码。"""
+    args, start_hidden = parse_launch_args(list(argv if argv is not None else sys.argv))
+
     configure_logging()
     install_crash_handler()
     install_exception_hook()
@@ -176,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
-    app = QApplication(argv if argv is not None else sys.argv)
+    app = QApplication(args)
     app.setApplicationName("华为智慧生活 PC 控制台")
     app.setOrganizationName("huawei-smartlife-pc")
     app.setStyle("Fusion")  # Fusion 对 QSS 的支持最一致
@@ -193,9 +220,19 @@ def main(argv: list[str] | None = None) -> int:
     from .controller import AppController
 
     controller = AppController()
-    window = MainWindow(controller)
+    window = MainWindow(controller, start_hidden=start_hidden)
     _center_on_screen(window)
-    window.show()
+
+    if start_hidden and window.tray.available:
+        # 开机自启动：只留托盘图标，不弹主窗口挡住刚登录的桌面。
+        # 托盘不可用时必须照常显示，否则用户开完机找不到这个程序。
+        # 没有可恢复的会话时，_bootstrap 会把窗口放出来（见 MainWindow）。
+        _LOGGER.info("以 --tray 启动，主窗口保持隐藏（托盘可用）")
+    else:
+        window.show()
+
+    # 旧版自启动项迁移：推迟到窗口出来之后，别让 PowerShell 启动拖慢首屏
+    QTimer.singleShot(1200, _migrate_autostart)
 
     exit_code = app.exec()
 

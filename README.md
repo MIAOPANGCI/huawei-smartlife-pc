@@ -29,6 +29,7 @@ Windows 桌面端的华为智慧生活控制程序：华为账号登录（含会
 | 桌面挂件    | ✅  | 常驻桌面横向设备条，可拖动、置顶、锁定、收起；拖到屏幕边缘自动吸附并贴边隐藏；标题栏相机按钮一键看实时画面 |
 | 设备自选与排序 | ✅  | 托盘面板与桌面挂件均可自选设备、自由排序，顺序持久化                   |
 | 运行日志    | ✅  | 中文摘要（`热水器 · 电源 电流 1717mA`），遥测默认折叠、按需展开   |
+| 设置       | ✅  | 两列布局（左：外观/启动/账号，右：挂件/诊断/关于）；支持开机自启动（登录后静默到托盘） |
 | 摄像头     | ⚠️ | 仅开放 RTSP 的型号（小豚当家室外 3K / 5 4K 系列）可在 PC 内嵌看实时画面，其余机型走华为云加密通道只能手机 App 看 |
 
 ## 界面
@@ -171,6 +172,42 @@ pyw -3 main.py         # 无控制台窗口运行
 > `~/.huawei_smartlife/app.log`。日志初始化时会先试写一次标准错误，
 > 句柄无效就只挂文件 handler，不会因为"没有控制台"把日志整体丢掉。
 
+### 开机自启动
+
+设置 →「启动」→ 勾选「开机自启动」即可，不需要管理员权限：
+
+- 在「启动」文件夹（`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`）
+  放一个名为 **「华为智慧生活 PC 控制台」** 的快捷方式，取消时删掉它；
+- 快捷方式指向项目根目录的 **`HuaweiSmartLife.exe`**（一个 8.9 MB 的启动器），
+  由它再拉起 `pythonw main.py --tray`；
+- **为什么要多这一层**：任务管理器「启动应用」的名称列读的是**启动目标的产品名**，
+  不是快捷方式的名字。我们的目标是 `pythonw.exe`，于是那一栏写「Python」——
+  既认不出是谁，还容易被当成可疑自启项。改名、换注册表值名都没用
+  （自己的 `Clash-Verge.lnk` 也显示成「Clash Verge」，可见它读的是 exe 的产品信息）。
+  启动器带了自己的版本资源，所以显示为「华为智慧生活 PC 控制台」；
+- 没打包启动器时会自动退回 `pythonw`：功能一样，只是任务管理器显示成 Python。
+  不想留这个 exe 就删掉它，下次勾选会自动退回；
+- `--tray`：登录后只驻留托盘，不弹黑框、不拿主窗口挡住刚进桌面；
+- 万一没有可恢复的会话（比如刚退出登录就重启），窗口会自己弹出来让你登录——
+  否则程序在跑、却停在隐藏的登录页上，用户只在托盘里才能发现它；
+- 旧版本写的是 `HKCU\...\Run` 里的 `HuaweiSmartLifePC`。启动时会自动迁移成快捷方式
+  并删掉旧项（两份同时存在会开机启动两次）；
+- 项目目录挪过位置后，快捷方式里还是旧路径，取消再勾选一次即可更新；
+- 也可以在「任务管理器 → 启动应用」里停用它，效果等同取消勾选。
+
+#### 重新打包启动器
+
+```bash
+py -3 -m pip install pyinstaller   # 只需第一次
+py -3 launcher/build.py            # 生成 HuaweiSmartLife.exe（约 9 MB）
+```
+
+`launcher.json` 记录打包时用的 `pythonw` 绝对路径（本机相关，不进仓库）；
+启动器找不到它时会退回 PATH 上的 `pythonw.exe` / `pyw.exe`。
+
+> 这个 exe 没有代码签名，个别杀毒软件可能对 PyInstaller 单文件产物报毒。
+> 真被拦了就删掉 exe，自启动会自动退回 pythonw（只是任务管理器里显示成 Python）。
+
 > 机器上有多个 Python 时，务必让 `pip` 与运行程序的 `python` 是同一个解释器；  
 > 若 `python` 指向的是精简版（`import tkinter` 失败、pip 装不上 PySide6），  
 > 直接用 `py -3`。日志写在 `~/.huawei_smartlife/app.log`；  
@@ -208,6 +245,12 @@ HUAWEI-SMARTLIFE-PC/
 ├── _smoke_test.py             # 无头自检（246 项）
 ├── _edge_check.py             # 挂件贴边隐藏专项自检（吸附 / 缩进 / 滑出 / 落盘坐标）
 ├── _camera_popup_check.py     # 挂件快捷看画面专项自检（入口显隐 / 排序 / 定位 / 释放）
+├── _settings_check.py         # 设置界面与开机自启动专项自检（两列 / 注册表失败回滚）
+├── _launcher_check.py         # 开机启动器自检（隔离目录验证参数转发与工作目录）
+├── launcher/                  # 开机启动器（打包成 HuaweiSmartLife.exe，产物不进仓库）
+│   ├── launcher.py            # 只做一件事：找到 pythonw，把 main.py 拉起来
+│   ├── version_info.txt       # 版本资源：任务管理器显示成「华为智慧生活 PC 控制台」
+│   └── build.py               # 打包脚本（py -3 launcher/build.py）
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
 │   ├── constants.py           # 域名 / App 标识 / REST 路径 / MQTT 参数
@@ -226,6 +269,7 @@ HUAWEI-SMARTLIFE-PC/
     ├── tray_panel.py          # 托盘弹出面板（设备浮层）
     ├── widget_board.py        # 桌面挂件（可拖动 / 锁定 / 收起 / 贴边自动隐藏 / 相机入口）
     ├── camera_popup.py        # 挂件旁的实时画面浮层（复用 camera_dialog 的读帧与绘制）
+    ├── autostart.py           # 开机自启动（「启动」文件夹快捷方式，带 --tray 静默启动）
     ├── state.py               # 设备状态存储与合并（纯 Python）
     ├── device_spec.py         # 设备能力推断与中文标签（纯 Python）
     ├── telemetry_text.py      # MQTT 报文 → 中文摘要（纯 Python）
@@ -272,7 +316,9 @@ python _smoke_test.py     # 无需显示环境、不联网
 场景渲染、搜索过滤、家庭筛选、弹窗去重、窗口圆角与最大化联动、启动分类记忆与回退、  
 托盘面板渲染与布局切换、桌面挂件收起/锁定与单卡刷新、贴边吸附/缩进/滑出与展开坐标落盘、
 挂件相机入口的显隐与浮层定位、未配置目标的引导、切换与释放、默认看哪台的设置项
-（`_camera_popup_check.py` 38 项）、
+（`_camera_popup_check.py` 38 项）、设置两列布局、开机自启动的命令生成与创建启动项
+失败时的勾选回滚、隐藏启动没有会话时自动显示窗口（`_settings_check.py` 28 项）、
+启动器参数转发与工作目录（`_launcher_check.py`，需先打包）、
 自选顺序与失效回退、  
 设备选择器的加入/移出/上移/下移/恢复默认与上限限制、保存后对话框不残留、  
 紧凑卡片不做整卡点击响应、二次验证渠道的默认选择与按钮可用性、  

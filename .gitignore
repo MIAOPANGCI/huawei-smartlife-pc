@@ -17,6 +17,10 @@ ui_settings.json
 *.log
 crash.log
 
+# ---- 开机启动器产物（py -3 launcher/build.py 生成，与本机 Python 路径绑定）----
+HuaweiSmartLife.exe
+launcher.json
+
 # ---- 开发工具与工作区记录 ----
 .workbuddy/
 .idea/

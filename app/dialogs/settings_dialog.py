@@ -1,4 +1,9 @@
-"""设置对话框：外观（深浅模式 / 主题色）、账号信息与说明。"""
+"""设置对话框：两列布局——左边日常（外观 / 启动 / 账号），右边进阶（挂件 / 诊断 / 关于）。
+
+分两列不是为好看：设置项加到九项之后单列要 1100px 高，1366×768 的笔记本上
+必须滚动才能看到「关闭」。两列把高度砍掉一半，同时按「常用 / 排查用」分组，
+左列是天天会动的，右列基本只在出问题时打开。
+"""
 
 from __future__ import annotations
 
@@ -18,7 +23,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import autostart
 from ..theme import ACCENT_PRESETS, theme
+
+DIALOG_WIDTH = 780
 
 
 class _ColorSwatch(QPushButton):
@@ -46,7 +54,7 @@ class _ColorSwatch(QPushButton):
 
 
 class SettingsDialog(QDialog):
-    """外观与账号设置。"""
+    """外观、启动、挂件与账号设置。"""
 
     mode_changed = Signal(str)
     accent_changed = Signal(str)
@@ -56,6 +64,7 @@ class SettingsDialog(QDialog):
     device_advanced_changed = Signal(bool)
     raw_protocol_changed = Signal(bool)
     camera_default_changed = Signal(str)
+    autostart_changed = Signal(bool)
     logout_requested = Signal()
 
     def __init__(
@@ -69,12 +78,16 @@ class SettingsDialog(QDialog):
         motion_enabled: bool = True,
         cameras: list[tuple[str, str]] | None = None,
         camera_default: str = "",
+        autostart_enabled: bool | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("设置")
         self.setModal(True)
-        self.setFixedWidth(430)
+        # 两列需要横向空间，但小屏（1024 宽以下）不能直接溢出屏幕
+        screen = QGuiApplication.primaryScreen()
+        limit = int(screen.availableGeometry().width() * 0.92) if screen else DIALOG_WIDTH
+        self.setFixedWidth(min(DIALOG_WIDTH, limit))
         self._account = account
         self._families = families or []
         self._startup_view = startup_view
@@ -85,32 +98,103 @@ class SettingsDialog(QDialog):
         # (显示名, key)：key 是设备 dev_id，手动接入的那台固定为 "manual"
         self._cameras = cameras or []
         self._camera_default = camera_default
+        # None = 问注册表要真实状态（设置项本身可能存在注册表里、不一定写过 settings）
+        self._autostart_enabled = (
+            autostart.is_enabled() if autostart_enabled is None else bool(autostart_enabled)
+        )
         self._build()
 
+    # ==================================================================
+    # 构建
+    # ==================================================================
     def _build(self) -> None:
-        # 设置项只会越来越多（外观/启动/诊断/账号/关于），小屏笔记本上直接铺开
-        # 会把底部按钮顶到屏幕外，包一层滚动区；关闭按钮固定在滚动区下方。
         shell = QVBoxLayout(self)
-        shell.setContentsMargins(24, 22, 24, 16)
+        shell.setContentsMargins(24, 20, 24, 14)
         shell.setSpacing(10)
 
+        # 两列之后高度已经降下来了，但小屏 + 系统缩放 150% 仍可能顶出去，
+        # 所以保留滚动区兜底。
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        page = QVBoxLayout(content)
+        page.setContentsMargins(0, 0, 0, 0)
+        page.setSpacing(14)
         self._scroll.setWidget(content)
         shell.addWidget(self._scroll, 1)
 
         title = QLabel("设置")
         title.setObjectName("PageTitle")
-        layout.addWidget(title)
+        page.addWidget(title)
 
-        # ---- 外观 ----
+        columns = QHBoxLayout()
+        columns.setSpacing(30)
+        left_host, self._left = self._column()
+        right_host, self._right = self._column()
+        columns.addWidget(left_host, 1)
+        columns.addWidget(right_host, 1)
+        page.addLayout(columns)
+
+        # ---- 左列：日常 ----
+        self._build_appearance(self._left)
+        self._left.addWidget(self._divider())
+        self._build_startup(self._left)
+        self._left.addWidget(self._divider())
+        self._build_account(self._left)
+        self._left.addStretch(1)
+
+        # ---- 右列：进阶 / 排查 ----
+        self._build_board(self._right)
+        self._right.addWidget(self._divider())
+        self._build_diagnosis(self._right)
+        self._right.addWidget(self._divider())
+        self._build_about(self._right)
+        self._right.addStretch(1)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        close = QPushButton("关闭")
+        close.setObjectName("Primary")
+        close.clicked.connect(self.accept)
+        close_row.addWidget(close)
+        shell.addLayout(close_row)
+
+        self._fit_to_screen()
+
+    def _column(self) -> tuple[QWidget, QVBoxLayout]:
+        host = QWidget()
+        box = QVBoxLayout(host)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(10)
+        return host, box
+
+    def _divider(self) -> QFrame:
+        line = QFrame()
+        line.setObjectName("Divider")
+        line.setFixedHeight(1)
+        return line
+
+    def _hint(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("Caption")
+        label.setWordWrap(True)
+        return label
+
+    def _row(self, label_text: str, widget: QWidget) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        label = QLabel(label_text)
+        label.setObjectName("Body")
+        row.addWidget(label, 0)
+        row.addWidget(widget, 1)
+        return row
+
+    # ---- 外观 ----
+    def _build_appearance(self, layout: QVBoxLayout) -> None:
         layout.addWidget(self._section("外观"))
+
         mode_row = QHBoxLayout()
         mode_row.setSpacing(8)
         self._mode_group = QButtonGroup(self)
@@ -152,15 +236,12 @@ class SettingsDialog(QDialog):
         self._motion_box.toggled.connect(self._on_motion_toggled)
         layout.addWidget(self._motion_box)
 
-        divider = QFrame()
-        divider.setObjectName("Divider")
-        divider.setFixedHeight(1)
-        layout.addWidget(divider)
-
-        # ---- 启动 ----
+    # ---- 启动 ----
+    def _build_startup(self, layout: QVBoxLayout) -> None:
         layout.addWidget(self._section("启动"))
+
         self._startup_combo = QComboBox()
-        self._startup_combo.setMinimumWidth(220)
+        self._startup_combo.setMinimumWidth(190)
         options: list[tuple[str, str]] = [
             ("全部设备", "all"),
             ("智能场景", "scenes"),
@@ -175,28 +256,62 @@ class SettingsDialog(QDialog):
                 current_index = index
         self._startup_combo.setCurrentIndex(current_index)
         self._startup_combo.currentIndexChanged.connect(self._on_startup_changed)
-        startup_row = QHBoxLayout()
-        startup_row.setSpacing(10)
-        startup_label = QLabel("启动时默认打开")
-        startup_label.setObjectName("Body")
-        startup_row.addWidget(startup_label, 0)
-        startup_row.addWidget(self._startup_combo, 1)
-        layout.addLayout(startup_row)
+        layout.addLayout(self._row("启动时默认打开", self._startup_combo))
+        layout.addWidget(self._hint("下次启动登录后自动切换到这个分类。"))
 
-        hint = QLabel("下次启动登录后自动切换到这个分类。")
-        hint.setObjectName("Caption")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
+        self._autostart_box = QCheckBox("开机自启动（登录 Windows 后自动运行）")
+        self._autostart_box.setChecked(self._autostart_enabled)
+        self._autostart_box.toggled.connect(self._on_autostart_toggled)
+        if not autostart.supported():
+            # 非 Windows 上这项没法实现，藏起来而不是留一个点了没反应的勾选框
+            self._autostart_box.hide()
+        layout.addWidget(self._autostart_box)
 
-        divider_startup = QFrame()
-        divider_startup.setObjectName("Divider")
-        divider_startup.setFixedHeight(1)
-        layout.addWidget(divider_startup)
+        if autostart.launcher_path() is not None:
+            hint_text = (
+                "在「启动」文件夹里放一个快捷方式（不需要管理员权限），开机后无窗口启动到托盘。"
+                "任务管理器「启动应用」里显示为「华为智慧生活 PC 控制台」。"
+            )
+        else:
+            # 没打包启动器时只能指向 pythonw，任务管理器按目标程序的产品名显示
+            hint_text = (
+                "在「启动」文件夹里放一个快捷方式（不需要管理员权限），开机后无窗口启动到托盘。"
+                "未打包启动器（py -3 launcher/build.py）时，任务管理器里会显示成 Python。"
+            )
+        startup_hint = self._hint(hint_text)
+        if autostart.supported():
+            startup_hint.setToolTip(f"快捷方式：{autostart.shortcut_path()}")
+        layout.addWidget(startup_hint)
+        if not autostart.supported():
+            startup_hint.hide()
 
-        # ---- 桌面挂件 ----
+    # ---- 账号 ----
+    def _build_account(self, layout: QVBoxLayout) -> None:
+        layout.addWidget(self._section("账号"))
+        account_label = QLabel(f"当前账号：{self._account or '未登录'}")
+        account_label.setObjectName("Body")
+        account_label.setWordWrap(True)
+        layout.addWidget(account_label)
+
+        layout.addWidget(
+            self._hint(
+                "登录凭据以明文保存在 ~/.huawei_smartlife/session.json，"
+                "仅供本机免密登录使用；退出登录会自动删除该文件。"
+            )
+        )
+
+        logout = QPushButton("退出登录并删除本地会话")
+        logout.setObjectName("Danger")
+        logout.setCursor(Qt.PointingHandCursor)
+        logout.clicked.connect(self._on_logout)
+        layout.addWidget(logout, 0, Qt.AlignLeft)
+
+    # ---- 桌面挂件 ----
+    def _build_board(self, layout: QVBoxLayout) -> None:
         layout.addWidget(self._section("桌面挂件"))
+
         self._camera_combo = QComboBox()
-        self._camera_combo.setMinimumWidth(220)
+        self._camera_combo.setMinimumWidth(190)
         self._camera_combo.addItem("跟随上次查看的那台", "")
         for label, key in self._cameras:
             self._camera_combo.addItem(label, key)
@@ -210,101 +325,55 @@ class SettingsDialog(QDialog):
         if not self._cameras:
             self._camera_combo.setEnabled(False)
 
-        camera_row = QHBoxLayout()
-        camera_row.setSpacing(10)
-        camera_label = QLabel("相机按钮默认看")
-        camera_label.setObjectName("Body")
-        camera_row.addWidget(camera_label, 0)
-        camera_row.addWidget(self._camera_combo, 1)
-        layout.addLayout(camera_row)
-
-        camera_hint = QLabel(
-            "挂件标题栏的相机按钮点开就看这台；选「跟随上次查看」则用你最后切到的那台"
-            "（在主界面点过某台的实时画面也算）。"
+        layout.addLayout(self._row("相机按钮默认看", self._camera_combo))
+        layout.addWidget(
+            self._hint(
+                "挂件标题栏的相机按钮点开就看这台；选「跟随上次查看」则用你最后切到的那台"
+                "（在主界面点过某台的实时画面也算）。"
+            )
         )
-        camera_hint.setObjectName("Caption")
-        camera_hint.setWordWrap(True)
-        layout.addWidget(camera_hint)
 
-        divider_board = QFrame()
-        divider_board.setObjectName("Divider")
-        divider_board.setFixedHeight(1)
-        layout.addWidget(divider_board)
-
-        # ---- 诊断 ----
+    # ---- 诊断 ----
+    def _build_diagnosis(self, layout: QVBoxLayout) -> None:
         layout.addWidget(self._section("诊断"))
+
         self._advanced_box = QCheckBox("设备详情显示高级信息")
         self._advanced_box.setChecked(self._device_advanced)
         self._advanced_box.toggled.connect(self._on_device_advanced_toggled)
         layout.addWidget(self._advanced_box)
-
-        advanced_hint = QLabel(
-            "默认只显示能操作的选项（开关、滑块，以及温度、电量这类日常指标）。"
-            "勾选后详情窗会展示只读诊断字段（信号强度、电压、原始数据）"
-            "与协议命令下发面板。"
+        layout.addWidget(
+            self._hint(
+                "默认只显示能操作的选项（开关、滑块，以及温度、电量这类日常指标）。"
+                "勾选后详情窗会展示只读诊断字段（信号强度、电压、原始数据）"
+                "与协议命令下发面板。"
+            )
         )
-        advanced_hint.setObjectName("Caption")
-        advanced_hint.setWordWrap(True)
-        layout.addWidget(advanced_hint)
 
         self._raw_box = QCheckBox("运行日志显示原始协议报文")
         self._raw_box.setChecked(self._raw_protocol)
         self._raw_box.toggled.connect(self._on_raw_protocol_toggled)
         layout.addWidget(self._raw_box)
-
-        raw_hint = QLabel(
-            "开启后运行日志直接输出 MQTT 原始 JSON（含 header / body 全部字段），"
-            "不再翻译成中文摘要。排查协议、对照官方 App 时用。"
+        layout.addWidget(
+            self._hint(
+                "开启后运行日志直接输出 MQTT 原始 JSON（含 header / body 全部字段），"
+                "不再翻译成中文摘要。排查协议、对照官方 App 时用。"
+            )
         )
-        raw_hint.setObjectName("Caption")
-        raw_hint.setWordWrap(True)
-        layout.addWidget(raw_hint)
 
         self._capture_box = QCheckBox("协议调试订阅（收到账号下所有 MQTT 消息）")
         self._capture_box.setChecked(self._capture_enabled)
         self._capture_box.toggled.connect(self._on_capture_toggled)
         layout.addWidget(self._capture_box)
-
-        capture_hint = QLabel(
-            "开启后会额外订阅 signaltrans 通配主题，连手机端官方 App 发出的查询"
-            "也会进到运行日志里——排查协议时有用，日常会让日志明显变吵。"
-            "切换后会重新连接实时通道。"
+        layout.addWidget(
+            self._hint(
+                "开启后会额外订阅 signaltrans 通配主题，连手机端官方 App 发出的查询"
+                "也会进到运行日志里——排查协议时有用，日常会让日志明显变吵。"
+                "切换后会重新连接实时通道。"
+            )
         )
-        capture_hint.setObjectName("Caption")
-        capture_hint.setWordWrap(True)
-        layout.addWidget(capture_hint)
 
-        divider_diag = QFrame()
-        divider_diag.setObjectName("Divider")
-        divider_diag.setFixedHeight(1)
-        layout.addWidget(divider_diag)
-
-        # ---- 账号 ----
-        layout.addWidget(self._section("账号"))
-        account_label = QLabel(f"当前账号：{self._account or '未登录'}")
-        account_label.setObjectName("Body")
-        layout.addWidget(account_label)
-
-        session_hint = QLabel(
-            "登录凭据以明文保存在 ~/.huawei_smartlife/session.json，"
-            "仅供本机免密登录使用；退出登录会自动删除该文件。"
-        )
-        session_hint.setObjectName("Caption")
-        session_hint.setWordWrap(True)
-        layout.addWidget(session_hint)
-
-        logout = QPushButton("退出登录并删除本地会话")
-        logout.setObjectName("Danger")
-        logout.setCursor(Qt.PointingHandCursor)
-        logout.clicked.connect(self._on_logout)
-        layout.addWidget(logout, 0, Qt.AlignLeft)
-
-        divider2 = QFrame()
-        divider2.setObjectName("Divider")
-        divider2.setFixedHeight(1)
-        layout.addWidget(divider2)
-
-        # ---- 关于 ----
+    # ---- 关于 ----
+    def _build_about(self, layout: QVBoxLayout) -> None:
         layout.addWidget(self._section("关于"))
         about = QLabel(
             "华为智慧生活 PC 控制台 · 非官方客户端\n"
@@ -315,24 +384,12 @@ class SettingsDialog(QDialog):
         about.setWordWrap(True)
         layout.addWidget(about)
 
-        close_row = QHBoxLayout()
-        close_row.addStretch(1)
-        close = QPushButton("关闭")
-        close.setObjectName("Primary")
-        close.clicked.connect(self.accept)
-        close_row.addWidget(close)
-        shell.addLayout(close_row)
-
-        self._fit_to_screen()
-
     def _fit_to_screen(self) -> None:
         """高度不超过屏幕可用区域的 85%，超出的部分交给滚动区。
 
-        不加限制的话，Qt 会按 sizeHint 给一个 800+ 高的窗口，
-        在 1366x768 这类笔记本上底部按钮会跑到屏幕外面。
+        不能用 ``self.sizeHint()``：滚动区给出的是它自己的默认高度，跟里面
+        放了多少内容无关（会算出一个比实际矮很多的窗口）。
         """
-        # 不能用 self.sizeHint()：滚动区给出的高度是它自己的默认值，
-        # 跟里面放了多少内容无关（会算出一个 464 的矮窗，实际要 834）。
         content = self._scroll.widget()
         body = content.sizeHint().height() if content is not None else 480
         margins = self.layout().contentsMargins()
@@ -347,12 +404,22 @@ class SettingsDialog(QDialog):
         screen = QGuiApplication.primaryScreen()
         if screen is not None:
             height = min(natural, max(380, int(screen.availableGeometry().height() * 0.85)))
-        self.resize(self.sizeHint().width(), height)
+        self.resize(self.width(), height)
 
     def _section(self, text: str) -> QLabel:
         label = QLabel(text)
         label.setObjectName("SectionTitle")
         return label
+
+    # ==================================================================
+    # 回调
+    # ==================================================================
+    def set_autostart(self, checked: bool) -> None:
+        """外部（写注册表失败时）把勾选状态改回真实值，不再触发信号。"""
+        self._autostart_enabled = bool(checked)
+        blocker = self._autostart_box.blockSignals(True)
+        self._autostart_box.setChecked(self._autostart_enabled)
+        self._autostart_box.blockSignals(blocker)
 
     def _on_motion_toggled(self, checked: bool) -> None:
         self._motion_enabled = bool(checked)
@@ -379,6 +446,10 @@ class SettingsDialog(QDialog):
         # 空串 = 跟随上次查看，是有意义的值，所以不像启动项那样跳过空值
         key = self._camera_combo.itemData(index)
         self.camera_default_changed.emit("" if key is None else str(key))
+
+    def _on_autostart_toggled(self, checked: bool) -> None:
+        self._autostart_enabled = bool(checked)
+        self.autostart_changed.emit(self._autostart_enabled)
 
     def _on_logout(self) -> None:
         self.logout_requested.emit()

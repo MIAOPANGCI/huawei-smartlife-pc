@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from .camera_popup import CameraPopup
 from .controller import APP_DIR, UI_SETTINGS_PATH, AppController, friendly_error
 from . import device_spec
+from . import autostart
 from .dialogs.camera_dialog import CameraDialog
 from .dialogs.device_dialog import DeviceDialog
 from .dialogs.device_picker import DevicePickerDialog
@@ -48,9 +49,12 @@ _LOGGER = logging.getLogger(__name__)
 class MainWindow(QMainWindow):
     """应用主窗口。"""
 
-    def __init__(self, controller: AppController) -> None:
+    def __init__(self, controller: AppController, *, start_hidden: bool = False) -> None:
         super().__init__()
         self.controller = controller
+        # 开机自启动以 --tray 启动时窗口默认不显示，靠托盘唤起；
+        # 但万一没有可恢复的会话，还是得把窗口放出来（见 _bootstrap）
+        self._start_hidden = bool(start_hidden)
         self._device_dialog: DeviceDialog | None = None
         # 每台摄像头一个独立窗口：客厅和门口可以同时看，不互相顶掉
         self._camera_dialogs: dict[str, CameraDialog] = {}
@@ -312,6 +316,28 @@ class MainWindow(QMainWindow):
         )
         self.toast.show_toast(f"相机按钮默认打开：{name}", "info")
 
+    def _set_autostart(self, dialog: SettingsDialog, enabled: bool) -> None:
+        """开机自启动：写 HKCU 的 Run 键。
+
+        只认注册表，不往 ui_settings.json 里再存一份——两处真相迟早会对不上
+        （用户可能在任务管理器里直接禁掉了启动项）。
+        """
+        try:
+            if enabled:
+                autostart.enable()
+            else:
+                autostart.disable()
+        except OSError as error:
+            # 杀毒软件拦截 / 注册表权限异常：把勾选框改回真实状态，别让界面说谎
+            dialog.set_autostart(autostart.is_enabled())
+            self.toast.show_toast(f"开机自启动设置失败：{error}", "warning")
+            return
+
+        self.toast.show_toast(
+            "已设为开机自启动，登录后自动运行到托盘" if enabled else "已取消开机自启动",
+            "info",
+        )
+
     def _on_camera_popup_configure(self, key: str) -> None:
         if key == "manual":
             self._open_manual_camera()
@@ -492,6 +518,8 @@ class MainWindow(QMainWindow):
         self.login_page.show_error(message)
         # 验证码提交失败时把焦点放回输入框，省得用户再去点一下
         self.login_page.focus_code()
+        # 免密恢复成功了但 token 已失效也会走到这里：隐藏启动时同样得放出来
+        self._reveal_if_launched_hidden()
 
     def _on_logged_out(self, reason: str) -> None:
         self._close_device_dialog()
@@ -784,6 +812,9 @@ class MainWindow(QMainWindow):
         dialog.device_advanced_changed.connect(self._set_device_advanced)
         dialog.raw_protocol_changed.connect(self._set_raw_protocol)
         dialog.camera_default_changed.connect(self._set_camera_default)
+        dialog.autostart_changed.connect(
+            lambda enabled: self._set_autostart(dialog, enabled)
+        )
         dialog.logout_requested.connect(self.controller.logout)
         dialog.exec()
 
@@ -874,12 +905,24 @@ class MainWindow(QMainWindow):
                 self.title_bar.set_controls_visible(False)
                 if not self.login_page.isVisible():
                     self._stack.setCurrentWidget(self.login_page)
+                self._reveal_if_launched_hidden()
 
         def failed(error: BaseException) -> None:
             self.dashboard.append_log(f"恢复登录状态失败：{friendly_error(error)}", "warning")
             self._stack.setCurrentWidget(self.login_page)
+            self._reveal_if_launched_hidden()
 
         run_async(self.controller.restore_session, done, failed)
+
+    def _reveal_if_launched_hidden(self) -> None:
+        """隐藏启动（开机自启）却没恢复出会话时，必须把窗口显示出来。
+
+        否则用户开完机什么也看不到：程序在跑，但停在登录页且窗口是隐藏的，
+        桌面上只有托盘图标——没登录过的人根本不知道要去点它登录。
+        """
+        if self._start_hidden and not self.isVisible():
+            self.show()
+            self.raise_()
 
     def _toggle_maximize(self) -> None:
         if self.isMaximized():
