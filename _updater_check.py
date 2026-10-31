@@ -143,11 +143,53 @@ def _make_empty_zip(path: Path) -> Path:
     return path
 
 
+def test_apply_entry() -> None:
+    """命令行入口：main.py 认出 --apply-update 并完成替换。
+
+    单元测试验证的是函数本身，这里补的是"打包版被拉起时的那条真实路径"——
+    参数解析、日志初始化都走一遍。
+    """
+    root = Path(__file__).resolve().parent
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        target = base / "old"
+        target.mkdir()
+        (target / f"{up.APP_NAME}.exe").write_bytes(b"old")
+        (target / "stale.dll").write_bytes(b"stale")
+
+        new_dir = base / "new"
+        new_dir.mkdir()
+        (new_dir / f"{up.APP_NAME}.exe").write_bytes(b"new")
+        (new_dir / "fresh.txt").write_text("new", encoding="utf-8")
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(root / "main.py"),
+                up.APPLY_FLAG,
+                "--target", str(target),
+                "--source", str(new_dir),
+                "--wait-pid", "0",
+            ],
+            capture_output=True,
+            timeout=180,
+            cwd=str(root),
+        )
+        # 6 = 替换完成但没法把假 exe 拉起来，这个用例里属于预期
+        check("入口走通了替换（0 或 6）", completed.returncode in (0, 6))
+        check(
+            "入口真的替换了主程序",
+            (target / f"{up.APP_NAME}.exe").read_bytes() == b"new",
+        )
+        check("入口清掉了旧文件", not (target / "stale.dll").exists())
+
+
 def main() -> int:
     test_versions()
     test_remote()
     test_stage()
     test_apply_update()
+    test_apply_entry()
     test_guards()
 
     print()
