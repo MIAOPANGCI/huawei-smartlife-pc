@@ -27,6 +27,10 @@ from huawei_smartlife.models import (
 
 from .device_spec import find_switch_service, switch_state_of
 
+# 回包里跟业务无关的协议字段。查询回包常带着 errcode（成功时是 0），
+# 直接合并会把它们变成服务属性，界面上就多出一个莫名其妙的「错误码 0」。
+_PROTOCOL_KEYS: frozenset[str] = frozenset({"errcode", "errmessage", "errmsg"})
+
 
 @dataclass
 class DeviceStore:
@@ -252,6 +256,60 @@ class DeviceStore:
         device.online = online
         self._notify(dev_id)
         return dev_id, True
+
+    def apply_service_data(self, dev_id: str, sid: str, data: object) -> bool:
+        """把一次查询响应（method=GET）里的服务数据合并进设备。
+
+        设备回包的写法有两种：直接给该服务的 data（``{"on": 1}``），
+        或者再包一层 ``{"services": [{"sid": ..., "data": ...}]}``；都按服务数据收。
+        返回是否有实际变化。
+        """
+        device = self._by_id.get(dev_id)
+        if device is None or not isinstance(data, dict):
+            return False
+
+        services = data.get("services")
+        if isinstance(services, list):
+            changed = False
+            for item in services:
+                if not isinstance(item, dict):
+                    continue
+                item_data = item.get("data")
+                if not isinstance(item_data, dict):
+                    continue
+                item_sid = item.get("sid") or sid
+                changed = self._merge_service(device, str(item_sid), item_data) or changed
+            if changed:
+                self._notify(dev_id)
+            return changed
+
+        if not data:
+            return False
+        changed = self._merge_service(device, sid, data)
+        if changed:
+            self._notify(dev_id)
+        return changed
+
+    @staticmethod
+    def _merge_service(device: Device, sid: str, data: dict) -> bool:
+        if not isinstance(sid, str) or not sid:
+            return False
+        clean = {
+            key: value for key, value in data.items() if key not in _PROTOCOL_KEYS
+        }
+        # 只剩 errcode 的回包（查询失败）没有任何可用的服务属性，直接忽略
+        if not clean:
+            return False
+        svc = device.services.get(sid)
+        if svc is None:
+            device.services[sid] = ServiceState(sid=sid, data=dict(clean))
+            return True
+        merged = {**dict(svc.data), **clean}
+        if merged == dict(svc.data):
+            return False
+        svc.data.clear()
+        svc.data.update(merged)
+        return True
 
     def mark_switch(self, dev_id: str, sid: str, key: str, value: object) -> None:
         """本地乐观更新开关值（命令下发后立即反映到 UI）。

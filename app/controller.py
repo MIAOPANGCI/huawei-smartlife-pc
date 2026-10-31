@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Any, Mapping
 
 from PySide6.QtCore import QObject, Signal
@@ -40,6 +41,7 @@ from huawei_smartlife.models import (
 )
 
 from .dispatch import post
+from .device_spec import describe_timer_tasks
 from .state import DeviceStore
 from .telemetry_text import describe_query, describe_telemetry
 from .workers import run_async
@@ -68,6 +70,10 @@ _SENSITIVE_KEYS: frozenset[str] = frozenset(
 )
 
 
+# 主动查询的登记在这么久之后自动失效（设备不回包时不至于一直挂着）
+_QUERY_TTL = 30.0
+
+
 def _mask_sensitive(value: Any) -> Any:
     """递归把敏感字段的值替换成 ***。"""
     if isinstance(value, Mapping):
@@ -90,6 +96,62 @@ def _pretty_json(payload: Any) -> str:
         return json.dumps(_mask_sensitive(payload), ensure_ascii=False, indent=2)
     except (TypeError, ValueError):
         return str(payload)
+
+
+def _split_service_uri(uri: object) -> tuple[str, str]:
+    """``/devices/{dev_id}/services/{sid}`` → (dev_id, sid)。
+
+    解析不出来时给两个空串，调用方据此退回「只记日志」的行为。
+    """
+    parts = [part for part in str(uri or "").strip("/").split("/") if part]
+    if len(parts) >= 4 and parts[0] == "devices" and parts[2] == "services":
+        return parts[1], parts[3]
+    return "", ""
+
+
+# 设备/网关错误码。只收确认过含义的，猜的一律不写进来——
+# 错误提示写错比不写更误导。
+_ERRCODE_HINTS: dict[int, str] = {
+    408: "网关等设备回复超时",
+    -1: "设备内部错误",
+    -2: "设备不支持该操作",
+    -3: "参数不合法",
+    -12: "设备拒绝执行（多半是参数不符合该服务要求）",
+}
+
+
+def _error_code_of(body: object) -> int | None:
+    """从回包里取 errcode，取不到给 None。"""
+    if not isinstance(body, dict):
+        return None
+    code = body.get("errcode")
+    if isinstance(code, bool):
+        return None
+    if isinstance(code, int):
+        return code
+    try:
+        return int(str(code)) if str(code).strip() else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_error_body(body: dict) -> bool:
+    """回包是不是「读失败」的错误体（errcode 存在且非 0）。"""
+    if "errcode" not in body:
+        return False
+    code = _error_code_of(body)
+    return code is None or code != 0
+
+
+def _summarize_service_data(sid: str, data: object) -> str:
+    """把查询回来的服务数据压成一行中文，省得用户自己啃 JSON。"""
+    if not isinstance(data, dict):
+        return str(data)
+    tasks = data.get("timer")
+    if sid in {"timer", "delay"} and isinstance(tasks, list):
+        return describe_timer_tasks(tasks)
+    text = json.dumps(_mask_sensitive(data), ensure_ascii=False)
+    return text if len(text) <= 220 else text[:220] + "…"
 
 
 def friendly_error(error: BaseException) -> str:
@@ -148,6 +210,13 @@ class AppController(QObject):
         self._capture_enabled = False
         # 运行日志输出原始 MQTT 报文（而非中文摘要），排查协议时开
         self._raw_protocol = False
+        # 主动查询登记：to(URI) -> 登记时刻。查询响应同样是 commandRsp，
+        # 但语义是"这是你要的当前值"而不是"命令被接受"，得分开处理。
+        self._pending_queries: dict[str, float] = {}
+        # 旁听日志节流：官方 App / 云端会每 10 秒轮询一次网关信息，
+        # 同一件事（同一 URI、同样结果）反复刷屏会把真正的操作记录埋掉。
+        # key -> (上次输出时刻, 期间被合并的条数)
+        self._log_throttle: dict[str, tuple[float, int]] = {}
         self._scenes: list[Scene] = []
         self._busy_count = 0
         self._build_client()
@@ -203,6 +272,30 @@ class AppController(QObject):
         except RuntimeError:
             # 窗口已销毁，无人接收，丢弃
             pass
+
+    def _emit_throttled(
+        self, key: str, text: str, level: str, window: float = 60.0
+    ) -> None:
+        """同类日志在窗口期内只输出一次，被合并的条数补在下一次输出里。
+
+        专门用于「别人的流量」：官方 App / 云端每 10 秒轮询一次网关，
+        成功失败各来一条，逐条记录的话几分钟就能把真正的操作记录顶出屏幕。
+        自己的操作（主动查询、命令响应）不走这里，保证每次都有反馈。
+        """
+        now = time.monotonic()
+        # 长期运行下 key 会按 URI 慢慢累积，超过阈值时清掉早已过期的项
+        if len(self._log_throttle) > 256:
+            cutoff = now - window * 5
+            for key, (stamp, _count) in list(self._log_throttle.items()):
+                if stamp < cutoff:
+                    self._log_throttle.pop(key, None)
+        last, merged = self._log_throttle.get(key, (0.0, 0))
+        if last and now - last < window:
+            self._log_throttle[key] = (last, merged + 1)
+            return
+        suffix = f"（期间 {merged} 次同类已合并）" if merged else ""
+        self._log_throttle[key] = (now, 0)
+        self._emit(self.log, f"{text}{suffix}", level)
 
     # ------------------------------------------------------------------
     # 忙碌状态（用于按钮禁用 / 进度提示）
@@ -466,13 +559,25 @@ class AppController(QObject):
         """下发命令。成功后乐观更新本地状态，等待设备回传校正。"""
         device = self.store.get(dev_id)
         name = device.name if device else dev_id
+        # 同一服务上接着下发普通命令时，取消之前的查询登记，
+        # 否则这条命令的回包会被当成「查询返回」处理。
+        self._pending_queries.pop(
+            target or f"/devices/{dev_id}/services/{sid}", None
+        )
 
         if not self._mqtt_connected:
             self._emit(self.notify, "实时通道未连接，请先点击「连接」", "warning")
 
-        override = ""
-        if topic or target or method or raw_body is not None:
-            override = f"（覆盖 topic={topic} to={target} method={method}）"
+        parts = []
+        if topic:
+            parts.append(f"topic={topic}")
+        if target:
+            parts.append(f"to={target}")
+        if method:
+            parts.append(f"method={method}")
+        if raw_body is not None:
+            parts.append("raw_body 覆盖")
+        override = f"（{'，'.join(parts)}）" if parts else ""
         self._emit(self.log, f"下发命令 → {name} / {sid} {json.dumps(data, ensure_ascii=False)}{override}", "info")
 
         def work() -> str:
@@ -499,6 +604,57 @@ class AppController(QObject):
             self._emit(self.notify, message, "danger")
 
         run_async(work, done, failed)
+
+    def query_service(self, dev_id: str, sid: str) -> None:
+        """主动向设备读取某个服务的当前值（``method=GET``）。
+
+        用处是「对账」：像 timer / delay 这种写进去回包含糊的服务，
+        光看 commandRsp 的 errcode 判断不了到底写成功没有，
+        必须再读一次设备真实保存的内容来比。
+        """
+        device = self.store.get(dev_id)
+        name = device.name if device else dev_id
+        target = f"/devices/{dev_id}/services/{sid}"
+        if not self._mqtt_connected:
+            self._emit(self.notify, "实时通道未连接，请先点击「连接」", "warning")
+            self._emit(self.log, "查询未发出：实时通道未连接。", "warning")
+            return
+        self._prune_pending_queries()
+        self._pending_queries[target] = time.monotonic()
+        self._emit(self.log, f"查询服务 → {name} / {sid}（读取设备当前值）", "info")
+
+        def work() -> str:
+            return self.client.send_command(dev_id, sid, {}, method="GET")
+
+        def done(_request_id: str) -> None:
+            self._emit(self.log, f"查询已发出，等待设备回报 {sid} 的当前内容…", "info")
+
+        def failed(error: BaseException) -> None:
+            self._pending_queries.pop(target, None)
+            message = friendly_error(error)
+            self._emit(self.log, f"查询下发失败：{message}", "danger")
+
+        run_async(work, done, failed)
+
+    def _prune_pending_queries(self) -> None:
+        """丢掉过期的查询登记。
+
+        设备一直不回包时登记会永远留着，之后这个服务的普通命令响应就会被
+        误判成查询响应、连「已接受」都不再提示。
+        """
+        deadline = time.monotonic() - _QUERY_TTL
+        for key, stamp in list(self._pending_queries.items()):
+            if stamp < deadline:
+                self._pending_queries.pop(key, None)
+
+    def _is_pending_query(self, target: str) -> bool:
+        stamp = self._pending_queries.get(target)
+        if stamp is None:
+            return False
+        if stamp < time.monotonic() - _QUERY_TTL:
+            self._pending_queries.pop(target, None)
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # MQTT
@@ -663,11 +819,7 @@ class AppController(QObject):
             body = payload.get("body")
             size = len(body) if isinstance(body, (list, dict)) else 0
             if method == "GET":
-                # 官方 App / 网关的查询响应（旁听到的），只留可读路径
-                if self._raw_protocol:
-                    self._emit(self.log, f"【查询】{_pretty_json(payload)}", "info")
-                else:
-                    self._emit(self.log, f"【查询】{describe_query(from_uri, size)}", "info")
+                self._handle_query_result(from_uri, body, payload, size)
             else:
                 self._emit(self.log, f"【命令响应】{describe_query(from_uri, size)}", "info")
             return
@@ -699,6 +851,72 @@ class AppController(QObject):
         else:
             self._emit(self.log, f"[消息] {topic}", "tag")
 
+    def _handle_query_result(
+        self, from_uri: str, body: object, payload: dict, size: int
+    ) -> None:
+        """处理 method=GET 的回包（自己的查询 + 旁听到的别人查询）。
+
+        两种回包要分开：``errcode`` 非 0 的是「读失败」（常见 408 = 网关等设备
+        超时），body 里只有错误码，绝不能当成服务数据写进设备——
+        否则 timer 的 data 里会多出一个莫名其妙的 errcode 字段
+        （界面还会显示"已刷新"，看着像成功，其实是脏数据）。
+        """
+        dev_id, sid = _split_service_uri(from_uri)
+        mine = self._pending_queries.pop(from_uri, None) is not None
+        ok = isinstance(body, dict) and not _is_error_body(body)
+
+        if self._raw_protocol:
+            self._emit(self.log, f"【查询结果】{_pretty_json(payload)}", "info")
+            if mine and ok and dev_id:
+                if self.store.apply_service_data(dev_id, sid, body):
+                    self._emit(self.device_changed, dev_id)
+            return
+
+        if not ok:
+            code = _error_code_of(body)
+            hint = _ERRCODE_HINTS.get(code, "")
+            detail = ""
+            if code is not None:
+                detail = f"（errcode={code}" + (f"，{hint}" if hint else "") + "）"
+            name = describe_query(from_uri, 0).replace("（0 项）", "")
+            if name in {"查询结果", "查询"}:
+                name = "设备"
+            if mine:
+                self._emit(self.log, f"【查询超时/失败】{name}{detail}", "warning")
+            else:
+                # 旁听：官方 App / 云端的定时轮询失败，与本地操作无关。
+                # 一是别写成「查询超时/失败」让人以为是自己发的；
+                # 二是降为 detail 级并按 URI 节流，否则每 10 秒刷两行。
+                self._emit_throttled(
+                    f"旁听失败|{from_uri}",
+                    f"【旁听】{name} 查询失败{detail}",
+                    "detail",
+                )
+            return
+
+        refreshed = False
+        if mine and dev_id:
+            refreshed = self.store.apply_service_data(dev_id, sid, body)
+            if refreshed:
+                self._emit(self.device_changed, dev_id)
+            name = describe_query(from_uri, size)
+            if size:
+                # 后面已经跟了内容摘要，这里的「N 项」只会让人以为是任务条数
+                name = name.replace(f"（{size} 项）", "")
+            self._emit(
+                self.log,
+                f"【查询返回】{name} ← {_summarize_service_data(sid, body)}",
+                "success",
+            )
+        else:
+            # 旁听到的（官方 App / 网关自己发的读），只记一行，不动本地状态；
+            # 同样是别人的定时轮询，降为 detail 并节流
+            self._emit_throttled(
+                f"旁听|{from_uri}",
+                f"【旁听】查询结果 {describe_query(from_uri, size)}",
+                "detail",
+            )
+
     def _on_command_response(
         self,
         request_id: str,
@@ -706,6 +924,11 @@ class AppController(QObject):
         errcode,
         body: dict | None = None,
     ) -> None:
+        # 主动查询的回包：同一份报文随后还会进 _on_mqtt_message，
+        # 那里知道完整上下文（method / from），所以这里只放行、不重复处理。
+        if self._is_pending_query(target):
+            return
+
         if errcode == 0:
             self._emit(self.notify, "设备已接受命令", "success")
             self._emit(self.log, f"命令响应：设备接受（{target}，errcode=0）", "success")
@@ -725,9 +948,13 @@ class AppController(QObject):
                 detail = f"：{message}"
             elif extra:
                 detail = f"：{json.dumps(extra, ensure_ascii=False)}"
+        code = errcode if isinstance(errcode, int) else _error_code_of({"errcode": errcode})
+        hint = _ERRCODE_HINTS.get(code, "") if isinstance(code, int) else ""
         self._emit(self.notify, f"设备拒绝了命令（errcode={errcode}）", "danger")
         self._emit(
             self.log,
-            f"命令响应：设备拒绝（{target}，errcode={errcode}{detail}）",
+            f"命令响应：设备拒绝（{target}，errcode={errcode}"
+            + (f"，{hint}" if hint else "")
+            + f"{detail}）",
             "danger",
         )

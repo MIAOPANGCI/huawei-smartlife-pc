@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from .controller import APP_DIR, UI_SETTINGS_PATH, AppController, friendly_error
 from . import device_spec
+from .dialogs.camera_dialog import CameraDialog
 from .dialogs.device_dialog import DeviceDialog
 from .dialogs.device_picker import DevicePickerDialog
 from .dialogs.settings_dialog import SettingsDialog
@@ -35,6 +36,7 @@ from .widgets.glyph_icons import make_app_icon
 from .pages.dashboard_page import DashboardPage
 from .pages.login_page import LoginPage
 from .theme import build_qss, theme
+from .widgets import motion
 from .widgets.title_bar import TitleBar
 from .widgets.toast import ToastHost
 from .workers import run_async
@@ -49,6 +51,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.controller = controller
         self._device_dialog: DeviceDialog | None = None
+        # 每台摄像头一个独立窗口：客厅和门口可以同时看，不互相顶掉
+        self._camera_dialogs: dict[str, CameraDialog] = {}
         self._settings: dict = self._load_settings()
         self._startup_pending = False
         self._quit_requested = False
@@ -72,6 +76,8 @@ class MainWindow(QMainWindow):
             bool(self._settings.get("capture_telemetry")), reconnect=False
         )
         self.controller.set_raw_protocol(bool(self._settings.get("raw_protocol")))
+        # 界面动画总开关，必须在任何过渡发生之前注入
+        motion.set_enabled(bool(self._settings.get("motion", True)))
 
         # 启动后异步尝试恢复会话，避免卡住首屏
         QTimer.singleShot(120, self._bootstrap)
@@ -122,6 +128,7 @@ class MainWindow(QMainWindow):
         self.dashboard.device_open_requested.connect(self._open_device)
         self.dashboard.device_power_requested.connect(self._on_power_requested)
         self.dashboard.settings_requested.connect(self._open_settings)
+        self.dashboard.manual_camera_requested.connect(self._open_manual_camera)
         self.dashboard.scenes_requested.connect(self.controller.load_scenes)
         self.dashboard.scene_execute_requested.connect(self.controller.execute_scene)
         self.dashboard.logout_requested.connect(self._confirm_logout)
@@ -354,6 +361,9 @@ class MainWindow(QMainWindow):
         self.login_page.set_busy(False)
         self.login_page.clear_error()
         self._stack.setCurrentWidget(self.dashboard)
+        # 登录→主界面跨页幅度最大，给一个稍慢的淡入，
+        # 让"进来了"这件事有落点，而不是瞬间换一张脸
+        motion.fade_in(self.dashboard, motion.SLOW)
         self.title_bar.set_controls_visible(True)
         self.title_bar.set_subtitle("已登录")
         self.dashboard.set_account(account)
@@ -409,7 +419,8 @@ class MainWindow(QMainWindow):
             self.dashboard.show_view(self._settings.get("startup_view", "all"))
 
     def _on_devices_reloaded(self) -> None:
-        self.dashboard.rebuild_cards()
+        # 首屏/刷新拉完设备后让卡片错峰浮出来，比"啪"地铺满一屏更容易看清
+        self.dashboard.rebuild_cards(animate=True)
         self.dashboard.reload_homes()
         self.dashboard.update_stats(self.controller.mqtt_connected)
         self._sync_tray_devices()
@@ -467,8 +478,10 @@ class MainWindow(QMainWindow):
             show_advanced=bool(self._settings.get("device_advanced")),
         )
         dialog.command_requested.connect(self._on_device_command)
+        dialog.query_requested.connect(self.controller.query_service)
         dialog.refresh_requested.connect(self.controller.refresh_device_state)
         dialog.advanced_changed.connect(self._set_device_advanced)
+        dialog.camera_requested.connect(self._open_camera)
         dialog.finished.connect(self._on_dialog_finished)
         self._device_dialog = dialog
         dialog.show()
@@ -500,6 +513,82 @@ class MainWindow(QMainWindow):
 
     def _on_device_command(self, dev_id: str, sid: str, data: dict, overrides: dict) -> None:
         self.controller.send_command(dev_id, sid, data, **overrides)
+
+    # ---------- 摄像头实时画面 ----------
+    def _open_camera(self, dev_id: str) -> None:
+        """打开（或聚焦）某台摄像头的实时画面窗口。"""
+        existing = self._camera_dialogs.get(dev_id)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            existing.activateWindow()
+            return
+
+        device = self.controller.store.get(dev_id)
+        if device is None:
+            return
+
+        dialog = CameraDialog(device, self._camera_config(dev_id), self)
+        dialog.config_changed.connect(self._save_camera_config)
+        dialog.log.connect(self.dashboard.append_log)
+        dialog.finished.connect(lambda _result, key=dev_id: self._camera_dialogs.pop(key, None))
+        self._camera_dialogs[dev_id] = dialog
+        dialog.show()
+        self._center_dialog(dialog)
+
+    def _open_manual_camera(self) -> None:
+        """打开「手动添加的网络摄像头」窗口。
+
+        这个入口不查华为设备列表——用来接任何开放 RTSP 的摄像头
+        （电信天翼看家、海康、大华，或者同型号但没绑在华为账号上的）。
+        配置按固定 key 存在 cameras["manual"] 下，与华为设备的 dev_id 不冲突。
+        """
+        key = "manual"
+        existing = self._camera_dialogs.get(key)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            existing.activateWindow()
+            return
+
+        dialog = CameraDialog(
+            None,
+            self._camera_config(key),
+            self,
+            manual_name="网络摄像头",
+            manual_key=key,
+        )
+        dialog.config_changed.connect(self._save_camera_config)
+        dialog.log.connect(self.dashboard.append_log)
+        dialog.finished.connect(
+            lambda _result, name=key: self._camera_dialogs.pop(name, None)
+        )
+        self._camera_dialogs[key] = dialog
+        dialog.show()
+        self._center_dialog(dialog)
+
+    def _camera_config(self, dev_id: str) -> dict:
+        cameras = self._settings.get("cameras")
+        if not isinstance(cameras, dict):
+            return {}
+        entry = cameras.get(dev_id)
+        return dict(entry) if isinstance(entry, dict) else {}
+
+    def _save_camera_config(self, dev_id: str, config: dict) -> None:
+        """记住这台摄像头的 IP/账号/密码/码流。
+
+        凭据只写在本机 ``ui_settings.json`` 里，不上传、不进日志；
+        日志与界面里展示的地址都经过 ``masked_url`` 打码。
+        """
+        cameras = self._settings.get("cameras")
+        if not isinstance(cameras, dict):
+            cameras = {}
+        cameras[dev_id] = dict(config)
+        self._settings["cameras"] = cameras
+        self._save_settings()
+
+    def _close_camera_dialogs(self) -> None:
+        for dialog in list(self._camera_dialogs.values()):
+            dialog.close()
+        self._camera_dialogs.clear()
 
     def _close_device_dialog(self) -> None:
         if self._device_dialog is not None:
@@ -558,16 +647,27 @@ class MainWindow(QMainWindow):
             capture_enabled=bool(self._settings.get("capture_telemetry")),
             device_advanced=bool(self._settings.get("device_advanced")),
             raw_protocol=bool(self._settings.get("raw_protocol")),
+            motion_enabled=bool(self._settings.get("motion", True)),
             parent=self,
         )
         dialog.mode_changed.connect(self._set_mode)
         dialog.accent_changed.connect(self._set_accent)
+        dialog.motion_changed.connect(self._set_motion)
         dialog.startup_view_changed.connect(self._set_startup_view)
         dialog.capture_changed.connect(self._set_capture)
         dialog.device_advanced_changed.connect(self._set_device_advanced)
         dialog.raw_protocol_changed.connect(self._set_raw_protocol)
         dialog.logout_requested.connect(self.controller.logout)
         dialog.exec()
+
+    def _set_motion(self, enabled: bool) -> None:
+        """界面动画总开关。关掉后所有过渡立即完成（远程桌面/低配机更跟手）。"""
+        self._settings["motion"] = bool(enabled)
+        self._save_settings()
+        motion.set_enabled(bool(enabled))
+        self.toast.show_toast(
+            "已开启界面动画" if enabled else "已关闭界面动画", "info"
+        )
 
     def _set_raw_protocol(self, enabled: bool) -> None:
         """日志显示原始报文：存盘、通知控制器，并把遥测展开。
@@ -690,6 +790,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt 接口
         self._save_settings()
         self._close_device_dialog()
+        self._close_camera_dialogs()
 
         # 托盘可用时，关闭窗口 = 收进托盘（真正退出走托盘菜单）
         if not self._quit_requested and self.tray.available:

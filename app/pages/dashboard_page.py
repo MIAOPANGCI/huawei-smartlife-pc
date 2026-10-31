@@ -43,12 +43,18 @@ from huawei_smartlife.models import Device, Scene
 from .. import device_spec
 from ..state import DeviceStore
 from ..theme import theme
+from ..widgets import motion
 from ..widgets.device_card import CARD_MIN_WIDTH, DeviceCard
 from ..widgets.flow_layout import FlowLayout
 from ..widgets.glyph_icons import make_icon
 
 _GRID_GAP = 14
 _CARD_MAX_WIDTH = 268
+
+# 卡片错峰出现：每张晚这么久，最多让前这么多张依次淡入。
+# 再多就不是"顺畅地出现"而是"等得烦"了，后面的直接显示。
+_STAGGER_MS = 22
+_STAGGER_MAX_CARDS = 12
 
 
 class _Chip(QFrame):
@@ -153,6 +159,7 @@ class DashboardPage(QWidget):
     selection_changed = Signal(object)   # Device | None
     logout_requested = Signal()
     settings_requested = Signal()
+    manual_camera_requested = Signal()
     mqtt_toggle_requested = Signal()
 
     VIEW_DEVICES = 0
@@ -226,6 +233,13 @@ class DashboardPage(QWidget):
         self._refresh_button = self._tool_button("refresh", "刷新设备列表")
         self._refresh_button.clicked.connect(self.refresh_requested.emit)
         row.addWidget(self._refresh_button, 0, Qt.AlignVCenter)
+
+        # 不依赖华为设备列表的入口：任何开放 RTSP 的摄像头都能看
+        self._camera_button = self._tool_button(
+            "camera", "网络摄像头：手动填 RTSP 地址，看任意品牌摄像头"
+        )
+        self._camera_button.clicked.connect(self.manual_camera_requested.emit)
+        row.addWidget(self._camera_button, 0, Qt.AlignVCenter)
 
         self._log_button = self._tool_button("logs", "运行日志")
         self._log_button.clicked.connect(lambda: self._apply_view(self.VIEW_LOGS))
@@ -342,7 +356,11 @@ class DashboardPage(QWidget):
     # 视图与筛选
     # ==================================================================
     def _apply_view(self, view: int) -> None:
+        previous = self._stack_widget.currentIndex()
         self._stack_widget.setCurrentIndex(view)
+        if view != previous:
+            # 两个视图的布局差别很大，硬切会"跳"一下；一次短暂淡入就够
+            motion.fade_in(self._stack_widget.currentWidget(), motion.FAST)
         self._sync_tool_state()
         if view == self.VIEW_LOGS:
             self._title_button.setText("运行日志  ▾")
@@ -371,7 +389,7 @@ class DashboardPage(QWidget):
         self._sync_tabs()
         self._sync_tool_state()
         self._update_header()
-        self.rebuild_cards()
+        self.rebuild_cards(animate=True)
 
     def _sync_tabs(self) -> None:
         target = "all" if self._filter is None else self._filter
@@ -507,7 +525,12 @@ class DashboardPage(QWidget):
         return devices
 
     # ---------- 卡片 ----------
-    def rebuild_cards(self) -> None:
+    def rebuild_cards(self, animate: bool = False) -> None:
+        """重建卡片网格。
+
+        animate=True 时卡片错峰淡入。只在「换筛选条件 / 首次铺满」时开，
+        状态刷新和窗口缩放重用已有卡片，不该重复播动画。
+        """
         layout = self._device_container.flow
         layout.clear()
         self._cards.clear()
@@ -523,9 +546,11 @@ class DashboardPage(QWidget):
             hint.setAlignment(Qt.AlignCenter)
             hint.setMinimumHeight(140)
             layout.addWidget(hint)
+            if animate:
+                motion.fade_in(hint, motion.FAST)
             return
 
-        for device in devices:
+        for index, device in enumerate(devices):
             card = DeviceCard(device, self._card_width)
             card.clicked.connect(self._on_card_clicked)
             card.power_requested.connect(self.device_power_requested.emit)
@@ -533,6 +558,9 @@ class DashboardPage(QWidget):
                 card.set_selected(True)
             layout.addWidget(card)
             self._cards[device.dev_id] = card
+            if animate:
+                delay = index * _STAGGER_MS if index < _STAGGER_MAX_CARDS else 0
+                motion.fade_in(card, motion.NORMAL, delay)
 
         self._recalc_card_width()
         self._update_container_height()

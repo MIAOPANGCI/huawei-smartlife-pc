@@ -1156,6 +1156,160 @@ def main() -> int:
     check("填入后光标在开头（能看见字段名）", fill_dialog._data_edit.cursorPosition() == 0)
     fill_dialog.close()
 
+    # ---- 38. 主动查询：URI 解析 + 查询结果回填设备状态 ----
+    from app.controller import _split_service_uri
+    from app.state import DeviceStore
+
+    check(
+        "服务 URI 能拆出设备与服务",
+        _split_service_uri("/devices/dev-1/services/timer") == ("dev-1", "timer"),
+    )
+    check("非服务 URI 解析为空", _split_service_uri("/users/u1") == ("", ""))
+    check("空 URI 不会抛异常", _split_service_uri(None) == ("", ""))
+
+    query_store = DeviceStore()
+    query_store.replace_snapshot(
+        DiscoverySnapshot(
+            homes=[Home(home_id="h1", name="家")],
+            devices=[
+                Device(
+                    home_id="h1",
+                    dev_id="dev-q",
+                    name="空调",
+                    online=True,
+                    services={"timer": ServiceState(sid="timer", data={"num": 0, "timer": []})},
+                )
+            ],
+        )
+    )
+    new_tasks = [
+        {
+            "id": 3,
+            "enable": 1,
+            "week": 0,
+            "start": "170000Z",
+            "end": "170500Z",
+            "para": "on",
+            "paraValue": 1,
+            "sid": "switch",
+        }
+    ]
+    changed = query_store.apply_service_data(
+        "dev-q", "timer", {"num": 1, "timer": new_tasks}
+    )
+    check("查询结果能回填到设备", changed is True)
+    check(
+        "回填后定时任务变成设备实际内容",
+        query_store.get("dev-q").services["timer"].data["timer"] == new_tasks,
+    )
+    check(
+        "同样的查询结果再回填不报变化",
+        query_store.apply_service_data("dev-q", "timer", {"num": 1, "timer": new_tasks})
+        is False,
+    )
+    check(
+        "包成 services 数组的回包也能认",
+        query_store.apply_service_data(
+            "dev-q", "timer", {"services": [{"sid": "timer", "data": {"num": 2}}]}
+        )
+        is True,
+    )
+    check(
+        "未知设备不会炸",
+        query_store.apply_service_data("dev-none", "timer", {"num": 1}) is False,
+    )
+
+    # ---- 39. 错误回包不能当成服务数据 ----
+    from app.controller import _is_error_body, _summarize_service_data
+
+    check("errcode=408 的回包识别为错误", _is_error_body({"errcode": 408}) is True)
+    check("errcode=0 的回包不算错误", _is_error_body({"errcode": 0}) is False)
+    check("没有 errcode 的服务数据不算错误", _is_error_body({"num": 1}) is False)
+    check(
+        "定时数据摘要带出时间与动作",
+        "17:00:00" in _summarize_service_data("timer", {"num": 1, "timer": new_tasks})
+        and "开关" in _summarize_service_data("timer", {"num": 1, "timer": new_tasks}),
+    )
+
+    # ---- 40. 摄像头：型号判定 + RTSP 地址 ----
+    from huawei_smartlife.camera import (
+        RtspCamera,
+        looks_like_camera,
+        nvr_support,
+        parse_rtsp_url,
+        rtsp_banner,
+    )
+
+    def cam_device(dev_name, model=None):
+        return Device(home_id="h1", dev_id="cam1", name=dev_name, model=model, online=True)
+
+    check(
+        "室外 3K 判定为开放 RTSP",
+        nvr_support(cam_device("门口摄像头", "小豚当家室外摄像头3K版")).ok is True,
+    )
+    check(
+        "室外 5 4K 判定为开放 RTSP",
+        nvr_support(cam_device("院子", "鸿蒙智选 小豚当家室外摄像头5 4K版")).ok is True,
+    )
+    check(
+        "AI 全彩双频版判不支持",
+        nvr_support(cam_device("客厅", "AI全彩摄像头 双频版")).ok is False,
+    )
+    # 关键回归：型号里同时含「室外」和「4G」，否定判断必须优先
+    check(
+        "室外 4G 版仍判不支持",
+        nvr_support(cam_device("院子", "室外摄像头4G版")).ok is False,
+    )
+    check(
+        "T5 双摄版判不支持",
+        nvr_support(cam_device("门口", "室外摄像头T5 3K双摄版")).ok is False,
+    )
+    check("鲸瞳判不支持", nvr_support(cam_device("楼道", "鲸瞳Max")).ok is False)
+    check("型号缺失时不乱下结论", nvr_support(cam_device("摄像头")).ok is None)
+    check("小豚在家被识别为摄像头", looks_like_camera(cam_device("小豚当家")))
+
+    rtsp = RtspCamera("门口", "192.0.2.10", "admin", "DemoPw2Test", stream="sub")
+    check(
+        "子码流走 /onvif2",
+        rtsp.rtsp_url == "rtsp://admin:DemoPw2Test@192.0.2.10:554/onvif2",
+    )
+    rtsp.stream = "main"
+    check("主码流走 /onvif1", rtsp.rtsp_url.endswith("/onvif1"))
+    check(
+        "对外展示的地址不含明文密码",
+        "DemoPw2Test" not in rtsp.masked_url and "***" in rtsp.masked_url,
+    )
+    parsed = parse_rtsp_url("rtsp://admin:p%40ss@192.0.2.10/onvif1")
+    check(
+        "贴进来的地址能解析（密码解码）",
+        parsed.username == "admin" and parsed.password == "p@ss",
+    )
+    check("路径决定主/子码流", parsed.stream == "main" and parsed.resolved_path == "onvif1")
+    check("密码含特殊字符时重新编码", "p%40ss" in parsed.rtsp_url)
+    check("不可达地址不抛异常", rtsp_banner("192.0.2.1", timeout=0.2) is None)
+
+    from app.dialogs.camera_dialog import CameraDialog
+
+    open_dialog = CameraDialog(
+        cam_device("门口摄像头", "小豚当家室外摄像头3K版"),
+        {"host": "192.0.2.10", "username": "admin", "password": "x", "stream": "main"},
+    )
+    open_cfg = open_dialog.config()
+    check(
+        "摄像头窗口回填上次配置",
+        open_cfg["host"] == "192.0.2.10" and open_cfg["stream"] == "main",
+    )
+    check("支持的型号给出开流指引", "硬盘录像机" in open_dialog._tip.text())
+
+    blocked_dialog = CameraDialog(cam_device("客厅摄像头", "AI全彩摄像头 双频版"))
+    check("不支持的型号直接说明原因", "私有加密" in blocked_dialog._tip.text())
+    check(
+        "空 IP 时不发起连接",
+        blocked_dialog._current_camera() is None and "IP" in blocked_dialog._status.text(),
+    )
+    open_dialog.close()
+    blocked_dialog.close()
+
     print()
     print(f"SMOKE TEST PASSED ({len(PASSED)} 项)")
     return 0

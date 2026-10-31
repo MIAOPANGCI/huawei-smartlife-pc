@@ -38,6 +38,15 @@ def _draw_logs(p: QPainter) -> None:
     p.drawLine(QPointF(6.5, 12.0), QPointF(9.5, 12.0))
 
 
+def _draw_camera(p: QPainter) -> None:
+    # 机身 + 右侧镜头楔形 + 镜头圆，16×16 内不与其他图标混淆
+    p.drawRoundedRect(QRectF(2.0, 5.6, 9.2, 6.8), 1.6, 1.6)
+    p.drawLine(QPointF(11.2, 8.2), QPointF(14.0, 6.9))
+    p.drawLine(QPointF(14.0, 6.9), QPointF(14.0, 11.1))
+    p.drawLine(QPointF(14.0, 11.1), QPointF(11.2, 9.8))
+    p.drawEllipse(QRectF(4.7, 7.5, 3.8, 3.8))
+
+
 def _draw_settings(p: QPainter) -> None:
     # 滑杆式设置图标（比齿轮在小尺寸下更清晰）
     for y, knob_x in ((5.0, 11.5), (9.0, 6.5), (13.0, 10.0)):
@@ -149,6 +158,7 @@ def _draw_power(p: QPainter) -> None:
 _DRAWERS = {
     "refresh": _draw_refresh,
     "logs": _draw_logs,
+    "camera": _draw_camera,
     "settings": _draw_settings,
     "sun": _draw_sun,
     "moon": _draw_moon,

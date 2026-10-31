@@ -50,6 +50,7 @@ class SettingsDialog(QDialog):
 
     mode_changed = Signal(str)
     accent_changed = Signal(str)
+    motion_changed = Signal(bool)
     startup_view_changed = Signal(str)
     capture_changed = Signal(bool)
     device_advanced_changed = Signal(bool)
@@ -64,6 +65,7 @@ class SettingsDialog(QDialog):
         capture_enabled: bool = False,
         device_advanced: bool = False,
         raw_protocol: bool = False,
+        motion_enabled: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -76,6 +78,7 @@ class SettingsDialog(QDialog):
         self._capture_enabled = bool(capture_enabled)
         self._device_advanced = bool(device_advanced)
         self._raw_protocol = bool(raw_protocol)
+        self._motion_enabled = bool(motion_enabled)
         self._build()
 
     def _build(self) -> None:
@@ -134,6 +137,14 @@ class SettingsDialog(QDialog):
             accent_row.addWidget(swatch)
         accent_row.addStretch(1)
         layout.addLayout(accent_row)
+
+        self._motion_box = QCheckBox("界面动画（卡片淡入、窗口滑入）")
+        self._motion_box.setChecked(self._motion_enabled)
+        self._motion_box.setToolTip(
+            "关掉后所有过渡立即完成。远程桌面、录屏或低配机器上更跟手。"
+        )
+        self._motion_box.toggled.connect(self._on_motion_toggled)
+        layout.addWidget(self._motion_box)
 
         divider = QFrame()
         divider.setObjectName("Divider")
@@ -298,6 +309,10 @@ class SettingsDialog(QDialog):
         label = QLabel(text)
         label.setObjectName("SectionTitle")
         return label
+
+    def _on_motion_toggled(self, checked: bool) -> None:
+        self._motion_enabled = bool(checked)
+        self.motion_changed.emit(self._motion_enabled)
 
     def _on_device_advanced_toggled(self, checked: bool) -> None:
         self._device_advanced = bool(checked)

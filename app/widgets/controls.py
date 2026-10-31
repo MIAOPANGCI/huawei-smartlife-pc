@@ -20,6 +20,18 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QAbstractButton, QWidget
 
 from ..theme import theme
+from . import motion
+
+
+def _mix(start: QColor, end: QColor, ratio: float) -> QColor:
+    """按 ratio 在两色之间插值（含 alpha）。ratio=0 取 start，1 取 end。"""
+    ratio = max(0.0, min(1.0, ratio))
+    return QColor(
+        int(start.red() + (end.red() - start.red()) * ratio),
+        int(start.green() + (end.green() - start.green()) * ratio),
+        int(start.blue() + (end.blue() - start.blue()) * ratio),
+        int(start.alpha() + (end.alpha() - start.alpha()) * ratio),
+    )
 
 
 class SwitchButton(QAbstractButton):
@@ -105,6 +117,11 @@ class PowerButton(QAbstractButton):
     ) -> None:
         super().__init__(parent)
         self._state = state
+        self._prev_state = state
+        # 0 = 还停在旧状态的样子，1 = 完全切换到新状态。
+        # 设备回传状态是异步的，按钮直接跳色会显得"闪一下"，
+        # 所以在两态之间插值，读起来像状态真的过渡过去了。
+        self._blend = 1.0
         self._diameter = diameter
         # 外圈留 3px 给「开启」时的淡光晕，避免绘制被控件边界裁掉
         self._pad = 3
@@ -112,16 +129,39 @@ class PowerButton(QAbstractButton):
         self.setCursor(Qt.PointingHandCursor)
         self.clicked.connect(lambda: self.toggled_requested.emit(self._state))
 
+        self._transition = QPropertyAnimation(self, b"blend", self)
+        self._transition.setDuration(180)
+        self._transition.setEasingCurve(QEasingCurve.OutCubic)
+
+    # -- 动画属性 --
+    def get_blend(self) -> float:
+        return self._blend
+
+    def set_blend(self, value: float) -> None:
+        self._blend = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    blend = Property(float, get_blend, set_blend)
+
     def set_state(self, state: str) -> None:
         if state == self._state:
             return
+        self._prev_state = self._state
         self._state = state
         self.setToolTip(
             {"on": "已开启，点击关闭", "off": "已关闭，点击开启"}.get(
                 state, "状态未知，点击尝试开启"
             )
         )
-        self.update()
+        if not motion.enabled():
+            self._blend = 1.0
+            self.update()
+            return
+        self._transition.stop()
+        self._transition.setStartValue(0.0)
+        self._transition.setEndValue(1.0)
+        self._blend = 0.0
+        self._transition.start()
 
     @property
     def state(self) -> str:
@@ -133,28 +173,57 @@ class PowerButton(QAbstractButton):
         palette = theme().palette
         pad = self._pad
         rect = QRectF(pad + 0.5, pad + 0.5, self._diameter - 1, self._diameter - 1)
-        if self._state == "on":
-            # 外光晕：让「开着」的设备在网格里一眼可见
+
+        ratio = self._blend
+
+        def fill_of(state: str) -> QColor:
+            if state == "on":
+                return QColor(palette.accent)
+            if state == "off":
+                return QColor(palette.surface_3)
+            return QColor(palette.surface_2)
+
+        def symbol_of(state: str) -> QColor:
+            if state == "on":
+                return QColor(palette.on_accent)
+            if state == "off":
+                return QColor(palette.text_2)
+            return QColor(palette.text_3)
+
+        fill = _mix(fill_of(self._prev_state), fill_of(self._state), ratio)
+        symbol_color = _mix(symbol_of(self._prev_state), symbol_of(self._state), ratio)
+
+        # 光晕只在「开」这一侧存在，跟着过渡一起淡入/淡出，
+        # 而不是开关瞬间"啪"地出现或消失。
+        if self._prev_state == self._state:
+            glow_ratio = 1.0 if self._state == "on" else 0.0
+        elif self._state == "on":
+            glow_ratio = ratio
+        else:
+            glow_ratio = 1.0 - ratio
+
+        if glow_ratio > 0.01:
             glow = QColor(palette.accent)
-            glow.setAlpha(38)
+            glow.setAlpha(int(38 * glow_ratio))
             painter.setPen(Qt.NoPen)
             painter.setBrush(glow)
             painter.drawEllipse(rect.adjusted(-2.6, -2.6, 2.6, 2.6))
-            painter.setBrush(QColor(palette.accent))
-            painter.drawEllipse(rect)
-            symbol_color = QColor(palette.on_accent)
-        elif self._state == "off":
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(palette.surface_3))
-            painter.drawEllipse(rect)
-            symbol_color = QColor(palette.text_2)
+
+        # 未知态才有描边，过渡时让它同步淡出/淡入
+        outline = (1.0 - ratio) if self._state != "unknown" else ratio
+        if self._prev_state == self._state:
+            outline = 1.0 if self._state == "unknown" else 0.0
+        if outline > 0.01:
+            border = QColor(palette.text_3)
+            border.setAlpha(int(255 * outline))
+            painter.setPen(QPen(border, 1.2))
         else:
-            painter.setPen(QPen(QColor(palette.text_3), 1.2))
-            painter.setBrush(QColor(palette.surface_2))
-            painter.drawEllipse(rect)
-            symbol_color = QColor(palette.text_3)
+            painter.setPen(Qt.NoPen)
+        painter.setBrush(fill)
+        painter.drawEllipse(rect)
 
         if not self.isEnabled():
+            painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(0, 0, 0, 30))
             painter.drawEllipse(rect)
             symbol_color.setAlpha(110)

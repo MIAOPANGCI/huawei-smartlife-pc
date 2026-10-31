@@ -5,10 +5,19 @@
 """
 
 from .camera import (
+    PLAYER_NAMES,
+    NvrSupport,
     RtspCamera,
     consumer_camera_guidance,
     filter_cameras,
+    find_player,
+    identify_hosts,
     looks_like_camera,
+    local_ipv4,
+    nvr_support,
+    parse_rtsp_url,
+    rtsp_banner,
+    scan_lan,
 )
 from .client import HuaweiSmartLifeClient
 from .exceptions import (
@@ -43,10 +52,19 @@ __version__ = "0.1.0"
 
 __all__ = [
     "HuaweiSmartLifeClient",
+    "PLAYER_NAMES",
+    "NvrSupport",
     "RtspCamera",
     "consumer_camera_guidance",
     "filter_cameras",
+    "find_player",
+    "identify_hosts",
     "looks_like_camera",
+    "local_ipv4",
+    "nvr_support",
+    "parse_rtsp_url",
+    "rtsp_banner",
+    "scan_lan",
     "HuaweiSmartLifeError",
     "AuthenticationError",
     "AuthExpiredError",

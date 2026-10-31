@@ -34,9 +34,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from huawei_smartlife.camera import looks_like_camera, nvr_support
 from huawei_smartlife.models import Device
 
 from .. import device_spec
+from ..widgets import motion
 from ..device_spec import (
     KIND_JSON,
     KIND_READONLY_NUMBER,
@@ -100,8 +102,10 @@ class DeviceDialog(QDialog):
     """设备控制详情窗。"""
 
     command_requested = Signal(str, str, dict, dict)  # dev_id, sid, data, overrides
+    query_requested = Signal(str, str)                # dev_id, sid
     refresh_requested = Signal(str)
     advanced_changed = Signal(bool)
+    camera_requested = Signal(str)                    # dev_id
 
     def __init__(
         self,
@@ -319,7 +323,19 @@ class DeviceDialog(QDialog):
         row3.addWidget(self._mini_label("raw_body"))
         self._raw_body_edit = QLineEdit()
         self._raw_body_edit.setPlaceholderText("可选：直接覆盖整个 body（JSON）")
+        self._raw_body_edit.setMinimumWidth(90)
         row3.addWidget(self._raw_body_edit, 1)
+
+        # 下发被拒时唯一能定性的手段：读一次设备真实保存的内容，和本地对账。
+        # 空调这类设备的 REST 快照 data 恒为空，只有 MQTT 主动读才拿得到。
+        self._query_button = QPushButton("查询")
+        self._query_button.setObjectName("Ghost")
+        self._query_button.setToolTip(
+            "向设备读取选中服务的当前值（method=GET）\n"
+            "用来确认上一次下发到底写进去了没有"
+        )
+        self._query_button.clicked.connect(self._query_current_service)
+        row3.addWidget(self._query_button)
 
         # 排查下发格式时最省事的一步：先照抄设备当前值原样发一次，
         # 确认「这个服务到底能不能写」，再逐字段改。
@@ -433,6 +449,16 @@ class DeviceDialog(QDialog):
         self._hint.setObjectName("Caption")
         layout.addWidget(self._hint, 1)
 
+        # 只有摄像头才有「实时画面」；其它设备用 hide() 而不是不创建，
+        # 免得设备类型变了还要重建整个底部栏
+        self._camera_button = QPushButton("实时画面")
+        self._camera_button.setObjectName("Ghost")
+        self._camera_button.setCursor(Qt.PointingHandCursor)
+        self._camera_button.clicked.connect(
+            lambda: self.camera_requested.emit(self._device.dev_id)
+        )
+        layout.addWidget(self._camera_button)
+
         refresh = QPushButton("刷新状态")
         refresh.setObjectName("Ghost")
         refresh.setCursor(Qt.PointingHandCursor)
@@ -495,6 +521,16 @@ class DeviceDialog(QDialog):
             self._suppress = True
             self._power.setChecked(device_spec.switch_state_of(found[2]) == "on")
             self._suppress = False
+
+        # 摄像头才给「实时画面」入口；能不能真拉流取决于型号，
+        # 所以按型号判定结果写 tooltip，不让用户点进去才发现不行
+        is_camera = looks_like_camera(device)
+        self._camera_button.setVisible(is_camera)
+        if is_camera:
+            support = nvr_support(device)
+            self._camera_button.setToolTip(
+                ("可以拉流：" if support.ok else "可能取不到流：") + support.reason
+            )
 
     def _rebuild_properties(self, specs: list[ServiceSpec]) -> None:
         while self._body.count():
@@ -839,6 +875,19 @@ class DeviceDialog(QDialog):
     def _send(self, sid: str, data: dict, overrides: dict | None = None) -> None:
         self.command_requested.emit(self._device.dev_id, sid, data, overrides or {})
 
+    def _current_sid(self) -> str:
+        """下拉框当前选项 → 服务 sid（显示名和 sid 不一定相同）。"""
+        label = self._svc_combo.currentText()
+        return getattr(self, "_svc_labels", {}).get(label, label) or ""
+
+    def _query_current_service(self) -> None:
+        sid = self._current_sid()
+        if not sid:
+            self._hint.setText("请先选择要查询的服务。")
+            return
+        self._hint.setText(f"已请求读取 {sid} 的当前值，设备回报后会自动刷新。")
+        self.query_requested.emit(self._device.dev_id, sid)
+
     def _fill_current_data(self) -> None:
         """把选中服务当前上报的 data 原样填进输入框。
 
@@ -901,3 +950,15 @@ class DeviceDialog(QDialog):
 
         self._hint.setText("命令已提交，等待设备响应…")
         self._send(sid, data, overrides)
+
+    # ==================================================================
+    # 出现动画
+    # ==================================================================
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt 接口
+        super().showEvent(event)
+        # 只在第一次出现时滑上来。后面因为刷新数据重新 show 时再滑一次，
+        # 会让人以为窗口被关掉重开了。
+        if getattr(self, "_shown_once", False):
+            return
+        self._shown_once = True
+        QTimer.singleShot(0, lambda: motion.slide_in(self, 12, motion.NORMAL))

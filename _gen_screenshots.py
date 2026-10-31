@@ -24,6 +24,7 @@ from app import dispatch  # noqa: E402
 from app.controller import AppController  # noqa: E402
 from app.main_window import MainWindow  # noqa: E402
 from app.theme import set_theme  # noqa: E402
+from app.widgets import motion  # noqa: E402
 from huawei_smartlife.models import (  # noqa: E402
     Device,
     DiscoverySnapshot,
@@ -147,6 +148,8 @@ def main() -> int:
     app.setStyle("Fusion")
     set_theme(mode, accent)
     dispatch.attach()
+    # 截图必须拿到动画的终点帧：淡入过程中 grab 会拍到半透明
+    motion.set_enabled(False)
 
     controller = AppController()
     controller.restore_session = lambda: False

@@ -7,3 +7,6 @@ PySide6-Essentials>=6.6,<6.13
 cryptography>=42.0.0
 # 设备控制与实时状态推送（MQTT over TLS）
 paho-mqtt>=2.0.0
+# 摄像头实时画面（RTSP 拉流解码）—— 只有用到该功能才需要；
+# 未安装时其余功能不受影响，摄像头窗口会提示用外部播放器观看
+opencv-python>=4.8
