@@ -199,6 +199,15 @@ def main(argv: list[str] | None = None) -> int:
     install_crash_handler()
     install_exception_hook()
 
+    # 更新模式：由新解压出来的版本执行"覆盖旧目录"，不建窗口、不碰 Qt
+    if "--apply-update" in args:
+        from .updater import apply_update
+
+        _LOGGER.info("以 --apply-update 启动，开始替换旧版本")
+        code = apply_update(args)
+        _LOGGER.info("替换结束，退出码 %s", code)
+        return code
+
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )

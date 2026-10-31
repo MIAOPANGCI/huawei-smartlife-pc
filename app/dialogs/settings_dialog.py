@@ -7,7 +7,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+import tempfile
+import time
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -23,8 +27,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import autostart
+from .. import autostart, updater
 from ..theme import ACCENT_PRESETS, theme
+from ..workers import run_async
 from huawei_smartlife.version import VERSION
 
 DIALOG_WIDTH = 780
@@ -66,6 +71,7 @@ class SettingsDialog(QDialog):
     raw_protocol_changed = Signal(bool)
     camera_default_changed = Signal(str)
     autostart_changed = Signal(bool)
+    update_ready = Signal(str)          # 新版本目录，由主窗口接手替换
     logout_requested = Signal()
 
     def __init__(
@@ -103,6 +109,15 @@ class SettingsDialog(QDialog):
         self._autostart_enabled = (
             autostart.is_enabled() if autostart_enabled is None else bool(autostart_enabled)
         )
+        # 更新相关状态（下载进度由后台线程写、主线程定时读，见 _refresh_progress）
+        self._latest: updater.Release | None = None
+        self._last_check_at = 0.0
+        self._update_busy = False
+        self._staged_dir = ""
+        self._progress: dict = {"done": 0, "total": 0, "state": "idle"}
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(300)
+        self._progress_timer.timeout.connect(self._refresh_progress)
         self._build()
 
     # ==================================================================
@@ -142,6 +157,8 @@ class SettingsDialog(QDialog):
         self._build_appearance(self._left)
         self._left.addWidget(self._divider())
         self._build_startup(self._left)
+        self._left.addWidget(self._divider())
+        self._build_update(self._left)
         self._left.addWidget(self._divider())
         self._build_account(self._left)
         self._left.addStretch(1)
@@ -285,6 +302,159 @@ class SettingsDialog(QDialog):
         layout.addWidget(startup_hint)
         if not autostart.supported():
             startup_hint.hide()
+
+    # ---- 更新 ----
+    def _build_update(self, layout: QVBoxLayout) -> None:
+        layout.addWidget(self._section("更新"))
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self._version_label = QLabel(f"当前版本 v{VERSION}")
+        self._version_label.setObjectName("Body")
+        row.addWidget(self._version_label, 1)
+        self._check_btn = QPushButton("检查更新")
+        self._check_btn.setObjectName("Ghost")
+        self._check_btn.setCursor(Qt.PointingHandCursor)
+        self._check_btn.clicked.connect(self._on_check_update)
+        row.addWidget(self._check_btn)
+        layout.addLayout(row)
+
+        self._update_status = self._hint(
+            "从 GitHub 仓库拉取最新版本。源码运行时直接 git pull；"
+            "打包版会下载新包、替换后自动重启。"
+        )
+        layout.addWidget(self._update_status)
+
+        self._apply_btn = QPushButton("立即更新")
+        self._apply_btn.setObjectName("Primary")
+        self._apply_btn.setCursor(Qt.PointingHandCursor)
+        self._apply_btn.clicked.connect(self._on_apply_update)
+        self._apply_btn.hide()
+        layout.addWidget(self._apply_btn, 0, Qt.AlignLeft)
+
+        # 已经下载解压好，等用户点"重启并安装"
+        self._install_btn = QPushButton("重启并安装")
+        self._install_btn.setObjectName("Primary")
+        self._install_btn.setCursor(Qt.PointingHandCursor)
+        self._install_btn.clicked.connect(self._on_install)
+        self._install_btn.hide()
+        layout.addWidget(self._install_btn, 0, Qt.AlignLeft)
+
+    def _set_update_status(self, text: str, level: str = "idle") -> None:
+        palette = theme().palette
+        colour = {
+            "ok": palette.ok,
+            "warn": palette.warn,
+            "error": palette.danger,
+        }.get(level, palette.text_3)
+        self._update_status.setText(text)
+        self._update_status.setStyleSheet(f"color: {colour};")
+
+    def _on_check_update(self) -> None:
+        if self._update_busy:
+            return
+        # 匿名接口每小时只有 60 次配额，连点几下就会被限流；60 秒内复用上次结果
+        if self._latest is not None and time.monotonic() - self._last_check_at < 60:
+            self._on_update_found(self._latest)
+            return
+        self._update_busy = True
+        self._check_btn.setEnabled(False)
+        self._apply_btn.hide()
+        self._install_btn.hide()
+        self._set_update_status("正在检查…")
+        run_async(updater.fetch_latest, self._on_update_found, self._on_update_error)
+
+    def _on_update_found(self, release: updater.Release) -> None:
+        self._update_busy = False
+        self._last_check_at = time.monotonic()
+        self._check_btn.setEnabled(True)
+        self._latest = release
+        if updater.is_newer(release.version, VERSION):
+            self._set_update_status(
+                f"发现新版本 v{release.version}（当前 v{VERSION}）", "ok"
+            )
+            # 源码运行走 git pull，打包版走下载替换
+            self._apply_btn.setText(
+                "拉取更新" if updater.source_root() is not None else "下载并更新"
+            )
+            self._apply_btn.show()
+        else:
+            self._set_update_status(f"已是最新版本（v{VERSION}）", "ok")
+            self._apply_btn.hide()
+
+    def _on_update_error(self, error: BaseException) -> None:
+        self._update_busy = False
+        self._check_btn.setEnabled(True)
+        self._apply_btn.hide()
+        self._set_update_status(str(error), "error")
+
+    def _on_apply_update(self) -> None:
+        if self._update_busy or self._latest is None:
+            return
+        self._update_busy = True
+        self._apply_btn.setEnabled(False)
+
+        if updater.source_root() is not None:
+            self._set_update_status("正在拉取代码…")
+            run_async(updater.git_pull, self._on_git_pulled, self._on_apply_error)
+            return
+
+        dest = Path(tempfile.gettempdir()) / f"{updater.APP_NAME}-update.zip"
+        self._progress.update(done=0, total=self._latest.zip_size, state="downloading")
+        self._progress_timer.start()
+        self._set_update_status("准备下载…")
+
+        url = self._latest.zip_url
+
+        def job() -> str:
+            path = updater.download(url, dest, self._progress)
+            return str(updater.stage(path))
+
+        run_async(job, self._on_staged, self._on_apply_error)
+
+    def _refresh_progress(self) -> None:
+        done = int(self._progress.get("done") or 0)
+        total = int(self._progress.get("total") or 0)
+        if self._progress.get("state") == "done":
+            self._progress_timer.stop()
+            self._set_update_status("下载完成，正在解压…")
+            return
+        if total:
+            percent = min(99, int(done * 100 / total))
+            self._set_update_status(
+                f"下载中 {percent}%（{done / 1048576:.0f}/{total / 1048576:.0f} MB）"
+            )
+        else:
+            self._set_update_status(f"下载中 {done / 1048576:.1f} MB")
+
+    def _on_staged(self, new_dir: str) -> None:
+        self._progress_timer.stop()
+        self._update_busy = False
+        self._staged_dir = str(new_dir)
+        self._set_update_status(
+            f"v{self._latest.version if self._latest else ''} 已准备好，"
+            "点「重启并安装」完成更新",
+            "ok",
+        )
+        self._apply_btn.hide()
+        self._install_btn.show()
+
+    def _on_install(self) -> None:
+        if self._staged_dir:
+            self.update_ready.emit(self._staged_dir)
+
+    def _on_git_pulled(self, message: str) -> None:
+        self._update_busy = False
+        self._apply_btn.setEnabled(True)
+        self._set_update_status(message, "ok")
+        if "重启" in message:
+            self._set_update_status(f"{message}（关掉本程序重新打开即可）", "ok")
+
+    def _on_apply_error(self, error: BaseException) -> None:
+        self._progress_timer.stop()
+        self._update_busy = False
+        self._apply_btn.setEnabled(True)
+        self._set_update_status(str(error), "error")
 
     # ---- 账号 ----
     def _build_account(self, layout: QVBoxLayout) -> None:

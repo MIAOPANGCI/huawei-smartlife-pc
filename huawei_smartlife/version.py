@@ -7,7 +7,7 @@ Git tag 都由它派生（打包脚本会读这里）。
 
 from __future__ import annotations
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 #: 公开的版本字符串，遵循语义化版本：主版本.次版本.修订号
 __all__ = ["VERSION"]

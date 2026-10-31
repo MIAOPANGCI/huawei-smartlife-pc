@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QGuiApplication
@@ -27,6 +28,7 @@ from .camera_popup import CameraPopup
 from .controller import APP_DIR, UI_SETTINGS_PATH, AppController, friendly_error
 from . import device_spec
 from . import autostart
+from . import updater
 from .dialogs.camera_dialog import CameraDialog
 from .dialogs.device_dialog import DeviceDialog
 from .dialogs.device_picker import DevicePickerDialog
@@ -337,6 +339,27 @@ class MainWindow(QMainWindow):
             "已设为开机自启动，登录后自动运行到托盘" if enabled else "已取消开机自启动",
             "info",
         )
+
+    def _on_update_ready(self, new_dir: str) -> None:
+        """新版本已下载解压：确认后交给它替换文件，本进程随即退出。
+
+        替换必须由"已经跑在新目录里的那个进程"来做——正在运行的 exe 不能覆盖自己。
+        """
+        answer = QMessageBox.question(
+            self,
+            "安装更新",
+            "更新包已准备好。\n\n程序会关闭，替换文件后自动重新启动。现在安装吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            updater.launch_updater(Path(new_dir))
+        except updater.UpdateError as error:
+            QMessageBox.warning(self, "更新失败", str(error))
+            return
+        self._quit_app()
 
     def _on_camera_popup_configure(self, key: str) -> None:
         if key == "manual":
@@ -812,6 +835,7 @@ class MainWindow(QMainWindow):
         dialog.device_advanced_changed.connect(self._set_device_advanced)
         dialog.raw_protocol_changed.connect(self._set_raw_protocol)
         dialog.camera_default_changed.connect(self._set_camera_default)
+        dialog.update_ready.connect(self._on_update_ready)
         dialog.autostart_changed.connect(
             lambda enabled: self._set_autostart(dialog, enabled)
         )

@@ -1,14 +1,14 @@
 # 华为智慧生活 PC 控制台
 
-![version](https://img.shields.io/badge/version-1.0.0-blue)
+![version](https://img.shields.io/badge/version-1.1.0-blue)
 
 Windows 桌面端的华为智慧生活控制程序：华为账号登录（含会话保持）、设备列表、  
 状态查询与基本控制（开关 / 亮度 / 温度 / 模式等）。GUI 使用 **PySide6 (Qt 6) + QSS**，  
 窗口结构、设备卡片与状态面板参考 [MiHome-Windows](https://github.com/huanyuejue/MiHome-Windows)。
 
 **不想装 Python？** 直接下 [Releases](../../releases) 里的
-`HuaweiSmartLife-1.0.0-win64.zip`，解压双击 `HuaweiSmartLife.exe` 即可（约 100 MB，
-自带运行时，不需要 Python 环境）。
+`HuaweiSmartLife-1.1.0-win64.zip`，解压双击 `HuaweiSmartLife.exe` 即可（约 100 MB，
+自带运行时）。之后在设置里点「检查更新」就能直接升级到新版本。
 
 > ⚠️ **非官方项目**：与华为技术有限公司无任何关联，未获其授权或认可。
 > 华为未向个人开放智慧生活 API，本项目基于社区对 App 云端协议的逆向研究
@@ -35,7 +35,8 @@ Windows 桌面端的华为智慧生活控制程序：华为账号登录（含会
 | 桌面挂件    | ✅  | 常驻桌面横向设备条，可拖动、置顶、锁定、收起；拖到屏幕边缘自动吸附并贴边隐藏；标题栏相机按钮一键看实时画面 |
 | 设备自选与排序 | ✅  | 托盘面板与桌面挂件均可自选设备、自由排序，顺序持久化                   |
 | 运行日志    | ✅  | 中文摘要（`热水器 · 电源 电流 1717mA`），遥测默认折叠、按需展开   |
-| 设置       | ✅  | 两列布局（左：外观/启动/账号，右：挂件/诊断/关于）；支持开机自启动（登录后静默到托盘） |
+| 设置       | ✅  | 两列布局（左：外观/启动/更新/账号，右：挂件/诊断/关于）；支持开机自启动（登录后静默到托盘） |
+| 在线更新   | ✅  | 设置里查 GitHub Release，源码版一键 `git pull`，打包版下载新包替换并自动重启 |
 | 摄像头     | ⚠️ | 仅开放 RTSP 的型号（小豚当家室外 3K / 5 4K 系列）可在 PC 内嵌看实时画面，其余机型走华为云加密通道只能手机 App 看 |
 
 ## 界面
@@ -245,6 +246,28 @@ py -3 packaging/publish_release.py     # 需要 git 凭据里的 repo 权限
 > `launcher/` 里那个 8.9 MB 的**启动器**是另一回事：它是"源码运行 + 开机自启动"时
 > 用来让任务管理器显示应用名的转发器，发布包里不包含它，也不需要它。
 
+### 应用内更新
+
+设置 →「更新」→ 检查更新。按运行方式自动走两条路：
+
+| 运行方式 | 更新怎么做 |
+| --- | --- |
+| 源码运行（目录里有 `.git`） | 直接 `git pull --ff-only`，拉完提示重启 |
+| 打包版 | 下载 Release 的 zip → 解压到临时目录 → 点「重启并安装」，由新版本覆盖旧目录并自动重启 |
+
+打包版为什么能替换自己：**正在运行的 exe 不能被覆盖**，所以流程是「先把新版本
+解压到临时目录 → 用新版本启动一个 `--apply-update` 进程 → 自己退出 → 新进程等
+旧进程退出后改名备份、复制、启动，失败就把备份改回来」。不需要批处理脚本，
+也就没有黑框和中文路径的引号问题。
+
+几个实现上的取舍：
+
+- 查询走 GitHub 匿名 API（每小时 60 次配额），60 秒内重复点会复用上次结果；
+- **只开系统代理也能用**：urllib 默认只读环境变量、不读注册表，所以额外读了
+  「Internet 选项」里的代理设置——不然开着 Clash 的用户会看到"连不上 GitHub"；
+- 更新包固定解压到 `%TEMP%\HuaweiSmartLife-update`，每次先清空，不会堆残留；
+- 替换前先 `rename` 成 `HuaweiSmartLife.old` 备份，复制失败能改回来。
+
 > 机器上有多个 Python 时，务必让 `pip` 与运行程序的 `python` 是同一个解释器；  
 > 若 `python` 指向的是精简版（`import tkinter` 失败、pip 装不上 PySide6），  
 > 直接用 `py -3`。日志写在 `~/.huawei_smartlife/app.log`；  
@@ -284,6 +307,7 @@ HUAWEI-SMARTLIFE-PC/
 ├── _camera_popup_check.py     # 挂件快捷看画面专项自检（入口显隐 / 排序 / 定位 / 释放）
 ├── _settings_check.py         # 设置界面与开机自启动专项自检（两列 / 注册表失败回滚）
 ├── _launcher_check.py         # 开机启动器自检（隔离目录验证参数转发与工作目录）
+├── _updater_check.py          # 检查更新与替换逻辑自检（版本比较 / 解压 / 备份回滚）
 ├── launcher/                  # 开机启动器（打包成 HuaweiSmartLife.exe，产物不进仓库）
 │   ├── launcher.py            # 只做一件事：找到 pythonw，把 main.py 拉起来
 │   ├── version_info.txt       # 版本资源：任务管理器显示成「华为智慧生活 PC 控制台」
@@ -312,6 +336,7 @@ HUAWEI-SMARTLIFE-PC/
     ├── widget_board.py        # 桌面挂件（可拖动 / 锁定 / 收起 / 贴边自动隐藏 / 相机入口）
     ├── camera_popup.py        # 挂件旁的实时画面浮层（复用 camera_dialog 的读帧与绘制）
     ├── autostart.py           # 开机自启动（「启动」文件夹快捷方式，带 --tray 静默启动）
+    ├── updater.py             # 检查更新与一键更新（git pull / 下载替换）
     ├── state.py               # 设备状态存储与合并（纯 Python）
     ├── device_spec.py         # 设备能力推断与中文标签（纯 Python）
     ├── telemetry_text.py      # MQTT 报文 → 中文摘要（纯 Python）
