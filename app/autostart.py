@@ -48,16 +48,16 @@ def supported() -> bool:
 def _launch_parts() -> tuple[str, str]:
     """(启动目标, 参数)。
 
-    有打包好的 HuaweiSmartLife.exe 就指向它：任务管理器按目标程序的产品名显示，
-    那个 exe 的产品名是「华为智慧生活 PC 控制台」。没有就退回 pythonw——
-    功能一样能跑，只是任务管理器里会显示成「Python」。
+    打包版优先指向自己（``sys.frozen``）：那个 exe 本身就是完整程序，产品名也是
+    我们的，没必要再套一层启动器。源码运行时才用 launcher/ 打的转发器；
+    连它也还没打包时退回 pythonw——功能一样能跑，只是任务管理器会显示成「Python」。
     """
+    if getattr(sys, "frozen", False):
+        return sys.executable, "--tray"
+
     launcher = launcher_path()
     if launcher is not None:
         return launcher, "--tray"
-
-    if getattr(sys, "frozen", False):
-        return sys.executable, "--tray"
 
     interpreter = sys.executable or "pythonw.exe"
     windowed = os.path.join(os.path.dirname(interpreter), "pythonw.exe")

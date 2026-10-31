@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from .. import autostart
 from ..theme import ACCENT_PRESETS, theme
+from huawei_smartlife.version import VERSION
 
 DIALOG_WIDTH = 780
 
@@ -376,12 +377,13 @@ class SettingsDialog(QDialog):
     def _build_about(self, layout: QVBoxLayout) -> None:
         layout.addWidget(self._section("关于"))
         about = QLabel(
-            "华为智慧生活 PC 控制台 · 非官方客户端\n"
+            f"华为智慧生活 PC 控制台 v{VERSION} · 非官方客户端\n"
             "基于社区对智慧生活云端协议的逆向研究实现，华为未开放官方 API，"
             "接口可能随版本更新失效。仅供个人学习与研究使用。"
         )
         about.setObjectName("Caption")
         about.setWordWrap(True)
+        about.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(about)
 
     def _fit_to_screen(self) -> None:

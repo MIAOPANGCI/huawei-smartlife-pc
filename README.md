@@ -1,8 +1,14 @@
 # 华为智慧生活 PC 控制台
 
+![version](https://img.shields.io/badge/version-1.0.0-blue)
+
 Windows 桌面端的华为智慧生活控制程序：华为账号登录（含会话保持）、设备列表、  
 状态查询与基本控制（开关 / 亮度 / 温度 / 模式等）。GUI 使用 **PySide6 (Qt 6) + QSS**，  
 窗口结构、设备卡片与状态面板参考 [MiHome-Windows](https://github.com/huanyuejue/MiHome-Windows)。
+
+**不想装 Python？** 直接下 [Releases](../../releases) 里的
+`HuaweiSmartLife-1.0.0-win64.zip`，解压双击 `HuaweiSmartLife.exe` 即可（约 100 MB，
+自带运行时，不需要 Python 环境）。
 
 > ⚠️ **非官方项目**：与华为技术有限公司无任何关联，未获其授权或认可。
 > 华为未向个人开放智慧生活 API，本项目基于社区对 App 云端协议的逆向研究
@@ -208,6 +214,27 @@ py -3 launcher/build.py            # 生成 HuaweiSmartLife.exe（约 9 MB）
 > 这个 exe 没有代码签名，个别杀毒软件可能对 PyInstaller 单文件产物报毒。
 > 真被拦了就删掉 exe，自启动会自动退回 pythonw（只是任务管理器里显示成 Python）。
 
+### 打包成 exe 发布
+
+```bash
+py -3 packaging/build_release.py     # 约 1 分钟
+```
+
+产物在 `dist/`：
+
+- `HuaweiSmartLife/HuaweiSmartLife.exe` —— 完整应用（onedir），双击即用，不需要 Python；
+- `HuaweiSmartLife-<版本>-win64.zip` —— 上传 GitHub Release 的那个包（约 100 MB）。
+
+**版本号只有一个来源**：`huawei_smartlife/version.py` 里的 `VERSION`。界面「关于」、
+exe 的文件属性、zip 文件名都从它派生。发版流程就是改那一个字符串 →
+`py -3 packaging/build_release.py` → `git tag v<版本>` → 传 zip。
+
+为什么用 onedir 而不是 onefile：onefile 每次启动都要把上百 MB 解压到临时目录，
+冷启动要多等好几秒；onedir 双击即开，反正发布时都要压 zip。
+
+> `launcher/` 里那个 8.9 MB 的**启动器**是另一回事：它是"源码运行 + 开机自启动"时
+> 用来让任务管理器显示应用名的转发器，发布包里不包含它，也不需要它。
+
 > 机器上有多个 Python 时，务必让 `pip` 与运行程序的 `python` 是同一个解释器；  
 > 若 `python` 指向的是精简版（`import tkinter` 失败、pip 装不上 PySide6），  
 > 直接用 `py -3`。日志写在 `~/.huawei_smartlife/app.log`；  
@@ -250,9 +277,13 @@ HUAWEI-SMARTLIFE-PC/
 ├── launcher/                  # 开机启动器（打包成 HuaweiSmartLife.exe，产物不进仓库）
 │   ├── launcher.py            # 只做一件事：找到 pythonw，把 main.py 拉起来
 │   ├── version_info.txt       # 版本资源：任务管理器显示成「华为智慧生活 PC 控制台」
+│   ├── make_icon.py           # 把代码画的图标导出成多尺寸 .ico
 │   └── build.py               # 打包脚本（py -3 launcher/build.py）
+├── packaging/
+│   └── build_release.py       # 打包完整应用（onedir + zip），版本号取自 version.py
 ├── _gen_screenshots.py        # 用虚构数据生成文档截图
 ├── huawei_smartlife/          # 协议层（不依赖 GUI）
+│   ├── version.py             # 版本号唯一来源（界面 / exe 属性 / tag 都从这里来）
 │   ├── constants.py           # 域名 / App 标识 / REST 路径 / MQTT 参数
 │   ├── exceptions.py          # 异常体系
 │   ├── models.py              # AuthSession / Device / ServiceState / Scene ...

@@ -48,7 +48,7 @@ from .models import (
     SmartHomeCloudRoute,
 )
 
-__version__ = "0.1.0"
+from .version import VERSION as __version__
 
 __all__ = [
     "HuaweiSmartLifeClient",
