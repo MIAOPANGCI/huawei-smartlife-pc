@@ -431,7 +431,9 @@ class CameraPopup(QWidget):
         event.accept()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt 接口
-        if event.key() == Qt.Escape:
+        # 是 Qt.Key_Escape，不是 Qt.Escape——后者在 PySide6 里不存在，
+        # 按 ESC 会直接抛 AttributeError（Qt6 把按键常量收进了 Qt.Key 命名空间）
+        if event.key() == Qt.Key_Escape:
             self.hide()
             return
         super().keyPressEvent(event)

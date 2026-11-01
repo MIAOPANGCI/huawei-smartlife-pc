@@ -1,13 +1,13 @@
 # 华为智慧生活 PC 控制台
 
-![version](https://img.shields.io/badge/version-1.2.0-blue)
+![version](https://img.shields.io/badge/version-1.2.1-blue)
 
 Windows 桌面端的华为智慧生活控制程序：华为账号登录（含会话保持）、设备列表、  
 状态查询与基本控制（开关 / 亮度 / 温度 / 模式等）。GUI 使用 **PySide6 (Qt 6) + QSS**，  
 窗口结构、设备卡片与状态面板参考 [MiHome-Windows](https://github.com/huanyuejue/MiHome-Windows)。
 
 **不想装 Python？** 直接下 [Releases](../../releases) 里的
-`HuaweiSmartLife-1.2.0-win64.zip`，解压双击 `HuaweiSmartLife.exe` 即可（约 100 MB，
+`HuaweiSmartLife-1.2.1-win64.zip`，解压双击 `HuaweiSmartLife.exe` 即可（约 100 MB，
 自带运行时）。之后在设置里点「检查更新」就能直接升级到新版本。
 
 > ⚠️ **非官方项目**：与华为技术有限公司无任何关联，未获其授权或认可。
@@ -311,6 +311,7 @@ HUAWEI-SMARTLIFE-PC/
 ├── _settings_check.py         # 设置界面与开机自启动专项自检（两列 / 注册表失败回滚）
 ├── _launcher_check.py         # 开机启动器自检（隔离目录验证参数转发与工作目录）
 ├── _updater_check.py          # 检查更新与替换逻辑自检（版本比较 / 解压 / 备份回滚）
+├── _api_check.py              # 静态检查：代码里的 Qt.xxx 在当前 PySide6 上是否真存在
 ├── launcher/                  # 开机启动器（打包成 HuaweiSmartLife.exe，产物不进仓库）
 │   ├── launcher.py            # 只做一件事：找到 pythonw，把 main.py 拉起来
 │   ├── version_info.txt       # 版本资源：任务管理器显示成「华为智慧生活 PC 控制台」
@@ -389,6 +390,7 @@ python _smoke_test.py     # 无需显示环境、不联网
 （`_camera_popup_check.py` 38 项）、设置两列布局、开机自启动的命令生成与创建启动项
 失败时的勾选回滚、隐藏启动没有会话时自动显示窗口（`_settings_check.py` 28 项）、
 启动器参数转发与工作目录（`_launcher_check.py`，需先打包）、
+全项目 Qt 属性引用是否存在（`_api_check.py`）、
 自选顺序与失效回退、  
 设备选择器的加入/移出/上移/下移/恢复默认与上限限制、保存后对话框不残留、  
 紧凑卡片不做整卡点击响应、二次验证渠道的默认选择与按钮可用性、  

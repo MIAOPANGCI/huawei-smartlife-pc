@@ -15,7 +15,8 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PySide6.QtCore import QPoint  # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, Qt  # noqa: E402
+from PySide6.QtGui import QKeyEvent  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -271,7 +272,28 @@ def main() -> int:
     check("收起挂件时画面一起消失", not popup.isVisible())
     check("画面消失后挂件恢复自动缩回", window.board._edge_paused is False)
 
-    # ---- 12. 一台摄像头都没有时藏起入口 ----
+    # ---- 12. 按 ESC 关掉浮层 ----
+    # 曾经写成 Qt.Escape：PySide6 没这个属性，按一下 ESC 就抛 AttributeError
+    window._toggle_camera_popup()
+    app.processEvents()
+    check("浮层已打开（ESC 用例前置）", window._camera_popup.isVisible())
+    window._camera_popup.keyPressEvent(
+        QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
+    )
+    app.processEvents()
+    check("按 ESC 能关掉浮层", not window._camera_popup.isVisible())
+
+    # 其它按键不能被误当成 ESC
+    window._toggle_camera_popup()
+    app.processEvents()
+    window._camera_popup.keyPressEvent(
+        QKeyEvent(QEvent.KeyPress, Qt.Key_Space, Qt.NoModifier)
+    )
+    app.processEvents()
+    check("空格不会关掉浮层", window._camera_popup.isVisible())
+    window._camera_popup.hide()
+
+    # ---- 13. 一台摄像头都没有时藏起入口 ----
     window.controller.store.replace_snapshot(
         DiscoverySnapshot(
             homes=(Home(home_id="h1", name="我的家"),),
