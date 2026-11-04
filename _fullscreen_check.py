@@ -143,6 +143,29 @@ def test_wall(app: QApplication) -> None:
     check("删光后显示空态提示", wall._placeholder is not None)
     check("空态下窗口收成小尺寸", wall.width() < 700)
 
+    # ---- 全屏下增删格子 ----
+    # resize 会让 Qt 悄悄退出全屏，而标题栏的显隐是我们自己维护的；
+    # 不同步就会出现"没有标题栏、也没在全屏"的怪窗口（删到只剩一路时最容易撞上）
+    wall._add("a")
+    app.processEvents()
+    check("空态加回一路后标题栏仍在", wall._titlebar.isVisible())
+    check("单路时窗口按大画面铺开", wall.width() > 700)
+
+    wall._set_fullscreen(True)
+    app.processEvents()
+    check("进入全屏", wall.isFullScreen())
+    wall._add("b")
+    app.processEvents()
+    check("全屏下加一路不影响全屏状态", wall.isFullScreen())
+    wall._remove("b")
+    app.processEvents()
+    check("全屏下删回一路仍是全屏", wall.isFullScreen())
+    check("全屏时标题栏本来就该藏着", not wall._titlebar.isVisible())
+
+    wall._set_fullscreen(False)
+    app.processEvents()
+    check("退出全屏后标题栏回来", wall._titlebar.isVisible())
+
     wall.close()
 
 

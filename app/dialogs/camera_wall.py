@@ -384,6 +384,19 @@ class CameraWall(QDialog):
         不写成"翻转"是给空态用的：删光格子时窗口可能还停在全屏，而全屏时标题栏
         是藏着的——不主动还原，用户就只剩一句"点右上角 + 添加"、按钮却不存在。
         """
+        if full:
+            self.showFullScreen()
+        else:
+            self.showNormal()
+        self._sync_chrome()
+
+    def _sync_chrome(self) -> None:
+        """按窗口**真实**的全屏状态同步周边控件。
+
+        单独抽出来是因为窗口状态可能被我们以外的东西改掉（比如 resize 让它退出
+        全屏），只在 _set_fullscreen 里维护可见性迟早对不上。
+        """
+        full = self.isFullScreen()
         self._titlebar.setVisible(not full)
         margins = (0, 0, 0, 0) if full else (14, 14, 14, 14)
         self._shell.setContentsMargins(*margins)
@@ -394,10 +407,6 @@ class CameraWall(QDialog):
         self._full_btn.setToolTip(
             "退出全屏（Esc）" if full else "全屏（双击画面也可以）"
         )
-        if full:
-            self.showFullScreen()
-        else:
-            self.showNormal()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt 接口
         if event.key() == Qt.Key_Escape:
@@ -474,10 +483,14 @@ class CameraWall(QDialog):
         count = len(wanted)
         tile_w = 480 if count > 1 else 820
         tile_h = 270 if count > 1 else 462
-        self.resize(
-            min(1800, columns * tile_w + (columns - 1) * 10 + 24 + 28),
-            min(1150, rows * tile_h + (rows - 1) * 10 + 24 + 44 + 28),
-        )
+        # 全屏时不能动尺寸：resize 会让 Qt 悄悄退出全屏，而标题栏的显隐是我们
+        # 自己维护的、不跟着恢复，就留下一个"没有标题栏也没有全屏"的怪窗口
+        if not self.isFullScreen():
+            self.resize(
+                min(1800, columns * tile_w + (columns - 1) * 10 + 24 + 28),
+                min(1150, rows * tile_h + (rows - 1) * 10 + 24 + 44 + 28),
+            )
+        self._sync_chrome()
 
     def _layout_tiles(self, wanted: list[str], columns: int) -> None:
         """把格子摆进网格。
