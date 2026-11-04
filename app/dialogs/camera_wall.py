@@ -34,6 +34,7 @@ from .. import audio as audio_module
 from ..theme import theme
 from ..widgets.glyph_icons import make_icon
 from ..widgets.repaint_guard import RepaintGuard
+from ..widgets.volume_menu import show_volume_menu, volume_label
 from .camera_dialog import FrameGrabber, VideoView, have_opencv
 
 MAX_TILES = 9
@@ -113,6 +114,9 @@ class _Tile(QFrame):
         self._audio_btn.setIconSize(QSize(13, 13))
         self._audio_btn.setToolTip("听这一路的声音")
         self._audio_btn.clicked.connect(lambda: self.audio_toggled.emit(self._key))
+        # 右键调音量：单击只切这一路的声音开关，音量得另给入口
+        self._audio_btn.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._audio_btn.customContextMenuRequested.connect(self._show_volume_menu)
         ok, reason = audio_module.available()
         if ok:
             bar_layout.addWidget(self._audio_btn)
@@ -240,7 +244,16 @@ class _Tile(QFrame):
         self._audio_btn.setIcon(
             make_icon("sound" if on else "mute", theme().palette.text_2, 13)
         )
-        self._audio_btn.setToolTip("关掉这一路的声音" if on else "听这一路的声音")
+        hint = volume_label(self._audio.volume)
+        action = "关掉这一路的声音" if on else "听这一路的声音"
+        self._audio_btn.setToolTip(f"{action}（{hint}）；右键调音量")
+
+    def _show_volume_menu(self, _pos) -> None:
+        show_volume_menu(self._audio_btn, self._audio.volume, self._pick_volume)
+
+    def _pick_volume(self, value: float) -> None:
+        self._audio.set_volume(value)
+        self._refresh_audio_icon()
 
     def _on_audio_failed(self, message: str) -> None:
         # 声音失败不影响画面，标在按钮上就行

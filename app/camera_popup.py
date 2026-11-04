@@ -31,6 +31,7 @@ from .theme import theme
 from .widgets.glyph_icons import make_icon
 from .widgets.labels import ElidedLabel
 from .widgets.rounded_surface import RoundedSurface
+from .widgets.volume_menu import show_volume_menu, volume_label
 
 VIDEO_WIDTH = 480
 VIDEO_HEIGHT = 270
@@ -151,6 +152,9 @@ class CameraPopup(QWidget):
         self._audio_btn.setCursor(Qt.PointingHandCursor)
         self._audio_btn.setFlat(True)
         self._audio_btn.clicked.connect(self._toggle_audio)
+        # 右键调音量（和单台画面窗、多路同屏一致）
+        self._audio_btn.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._audio_btn.customContextMenuRequested.connect(self._show_volume_menu)
         layout.addWidget(self._audio_btn)
         self._refresh_audio_icon()
 
@@ -191,7 +195,16 @@ class CameraPopup(QWidget):
         self._audio_btn.setIcon(
             make_icon("sound" if on else "mute", theme().palette.text_2, 14)
         )
-        self._audio_btn.setToolTip("关掉这一路的声音" if on else "听这一路的声音")
+        hint = volume_label(self._audio.volume)
+        action = "关掉这一路的声音" if on else "听这一路的声音"
+        self._audio_btn.setToolTip(f"{action}（{hint}）；右键调音量")
+
+    def _show_volume_menu(self, _pos) -> None:
+        show_volume_menu(self._audio_btn, self._audio.volume, self._pick_volume)
+
+    def _pick_volume(self, value: float) -> None:
+        self._audio.set_volume(value)
+        self._refresh_audio_icon()
 
     def _toggle_audio(self) -> None:
         if self._audio.playing:

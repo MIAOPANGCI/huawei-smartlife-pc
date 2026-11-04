@@ -347,6 +347,7 @@ HUAWEI-SMARTLIFE-PC/
     ├── dialogs/camera_wall.py # 多路同屏：N 格网格，每格一套读帧 + 绘制
     ├── audio.py               # 摄像头声音（PyAV 解音轨 + sounddevice 播放）
     ├── widgets/repaint_guard.py # 半透明窗口缩回后的整窗重绘（全屏 bug 的兜底）
+    ├── widgets/volume_menu.py # 喇叭右键的音量菜单（100% 以上是软件增益）
     ├── autostart.py           # 开机自启动（「启动」文件夹快捷方式，带 --tray 静默启动）
     ├── updater.py             # 检查更新与一键更新（git pull / 下载替换）
     ├── state.py               # 设备状态存储与合并（纯 Python）
@@ -400,7 +401,7 @@ python _smoke_test.py     # 无需显示环境、不联网
 启动器参数转发与工作目录（`_launcher_check.py`，需先打包）、
 多路同屏的格数排布与线程释放（`_camera_wall_check.py` 22 项）、
 全屏的进出、控件恢复与缩回后的整窗重绘（`_fullscreen_check.py` 44 项）、
-音频的静音与多路互斥（`_audio_check.py` 18 项）、
+音频的静音、增益上限与多路互斥（`_audio_check.py` 30 项）、
 全项目 Qt 属性引用是否存在（`_api_check.py`）、
 自选顺序与失效回退、  
 设备选择器的加入/移出/上移/下移/恢复默认与上限限制、保存后对话框不残留、  
@@ -568,6 +569,9 @@ python _smoke_test.py     # 无需显示环境、不联网
 
 - 单台画面窗：画面通了自己开始播，状态行右侧的喇叭按钮可以静音
 - 多路同屏：默认全静音，点某一格的喇叭只听那一路——几台一起响根本分不清是哪来的
+- **喇叭左键静音、右键调音量**：摄像头麦克风普遍偏小声，G.711 又是窄带语音，
+  只调系统音量常常听不清。右键菜单里能往上推到 300%（软件增益），
+  超过 100% 会标「增强」；本次运行里调好的音量所有画面窗共用
 - 缺 `av` / `sounddevice` / 声卡时不影响画面，喇叭按钮会变灰，悬停能看到原因
 - `--audio-test` 可以自检：`HuaweiSmartLife.exe --audio-test`，它拿配置里第一台
   摄像头播 6 秒，结果写在 `~/.huawei_smartlife/app.log`。用户报"没声音"时先看这个

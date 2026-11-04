@@ -42,6 +42,7 @@ from ..theme import theme
 from ..widgets import motion
 from ..widgets.glyph_icons import make_icon
 from ..widgets.repaint_guard import RepaintGuard
+from ..widgets.volume_menu import show_volume_menu, volume_label
 from ..workers import run_async
 from huawei_smartlife.camera import (
     CANDIDATE_PATHS,
@@ -586,6 +587,9 @@ class CameraDialog(QDialog):
         self._audio_btn.setCursor(Qt.PointingHandCursor)
         self._audio_btn.setIconSize(QSize(14, 14))
         self._audio_btn.clicked.connect(self._toggle_audio)
+        # 右键调音量：单击只切静音，而摄像头麦克风常偏小声，得能往上推增益
+        self._audio_btn.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._audio_btn.customContextMenuRequested.connect(self._show_volume_menu)
         self._refresh_audio_icon()
         ok, reason = audio_module.available()
         if not ok:
@@ -600,7 +604,18 @@ class CameraDialog(QDialog):
         self._audio_btn.setIcon(
             make_icon("mute" if muted else "sound", theme().palette.text_2, 14)
         )
-        self._audio_btn.setToolTip("已静音，点一下开声音" if muted else "静音")
+        hint = volume_label(self._audio.volume)
+        if muted:
+            self._audio_btn.setToolTip(f"已静音（{hint}），点一下开声音；右键调音量")
+        else:
+            self._audio_btn.setToolTip(f"点一下静音；右键调音量（当前 {hint}）")
+
+    def _show_volume_menu(self, _pos) -> None:
+        show_volume_menu(self._audio_btn, self._audio.volume, self._pick_volume)
+
+    def _pick_volume(self, value: float) -> None:
+        self._audio.set_volume(value)
+        self._refresh_audio_icon()
 
     def _toggle_audio(self) -> None:
         self._audio.set_muted(not self._audio.muted)

@@ -40,7 +40,7 @@ class FakeAudio(QObject):
         super().__init__(parent)
         self._playing = False
         self._muted = False
-        self._volume = 0.8
+        self._volume = 1.0
         self.urls: list[str] = []
 
     @property
@@ -50,6 +50,10 @@ class FakeAudio(QObject):
     @property
     def muted(self) -> bool:
         return self._muted
+
+    @property
+    def volume(self) -> float:
+        return self._volume
 
     def play(self, url: str) -> None:
         self.urls.append(url)
@@ -109,6 +113,49 @@ def test_state() -> None:
     check("取消静音恢复原音量", abs(audio._state["volume"] - 0.9) < 1e-6)
 
 
+def test_boost() -> None:
+    """音量能往 1 以上推：摄像头麦克风普遍偏小声，只到 100% 不够用。"""
+    import numpy as np
+
+    audio = audio_module.CameraAudio()
+    audio.set_volume(2.0)
+    check("音量可以设到 200%（增益）", abs(audio.volume - 2.0) < 1e-6)
+    check("增益写进播放状态", abs(audio._state["volume"] - 2.0) < 1e-6)
+
+    audio.set_volume(99.0)
+    check("超过上限被夹到 MAX_VOLUME", abs(audio.volume - audio_module.MAX_VOLUME) < 1e-6)
+    check("上限够大（至少 2 倍）", audio_module.MAX_VOLUME >= 2.0)
+
+    check("新开的一路沿用上次音量", abs(audio_module.CameraAudio().volume - audio_module.MAX_VOLUME) < 1e-6)
+    audio_module.CameraAudio().set_volume(1.0)      # 复位，别影响后面的用例
+
+    # 增益真的作用到采样上：一半幅度 ×2 应当翻倍，超出 16bit 的削到边界
+    audio.set_volume(2.0)
+    samples = np.array([100, -200, 30000, -32000], dtype=np.int16)
+    scaled = (np.frombuffer(samples.tobytes(), dtype=np.int16).astype(np.int32) * 2.0
+              ).clip(-32768, 32767).astype(np.int16)
+    check("增益按倍数放大采样并削顶", list(scaled) == [200, -400, 32767, -32768])
+
+    # 静音不该把记住的音量改掉
+    audio.set_muted(True)
+    audio.set_volume(1.5)
+    audio.set_muted(False)
+    check("静音期间调的音量，取消静音后生效", abs(audio._state["volume"] - 1.5) < 1e-6)
+    audio_module.CameraAudio().set_volume(1.0)
+
+
+def test_volume_menu() -> None:
+    """右键菜单的档位要和 audio 的上限对得上。"""
+    from app.widgets.volume_menu import CHOICES, volume_label
+
+    values = [value for _label, value in CHOICES]
+    check("菜单里有 100% 档", any(abs(v - 1.0) < 1e-6 for v in values))
+    check("菜单最高档等于 MAX_VOLUME", abs(max(values) - audio_module.MAX_VOLUME) < 1e-6)
+    check("菜单档位递增", values == sorted(values))
+    check("100% 不标增强", "增强" not in volume_label(1.0))
+    check("150% 标出增强", "增强" in volume_label(1.5))
+
+
 def test_wall_exclusive(app: QApplication) -> None:
     wall_module.FrameGrabber = FakeGrabber          # type: ignore[assignment]
     wall_module.audio_module.CameraAudio = FakeAudio  # type: ignore[assignment]
@@ -155,6 +202,8 @@ def main() -> int:
 
     test_available()
     test_state()
+    test_boost()
+    test_volume_menu()
     test_wall_exclusive(app)
 
     print()

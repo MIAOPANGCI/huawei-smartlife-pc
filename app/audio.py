@@ -22,6 +22,23 @@ from PySide6.QtCore import QObject, QThread, Signal
 SAMPLE_RATE = 48000
 CHANNELS = 2
 
+# 软件增益上限。摄像头麦克风普遍偏小，G.711 又是窄带语音，实测本机两台在
+# 100% 下都偏轻，150%–200% 比较合适。再往上人声开始削顶发闷，所以封在 3 倍。
+MAX_VOLUME = 3.0
+
+# 本次运行内共享：在一格上把音量调大了，换一格、开单台窗口也应该沿用，
+# 不然每开一个新画面都要重新调一遍。
+_shared_volume = 1.0
+
+
+def shared_volume() -> float:
+    return _shared_volume
+
+
+def remember_volume(value: float) -> None:
+    global _shared_volume
+    _shared_volume = max(0.0, min(MAX_VOLUME, float(value)))
+
 
 def available() -> tuple[bool, str]:
     """依赖是否齐。返回 (可用, 缺什么)。"""
@@ -122,7 +139,8 @@ class _AudioWorker(QThread):
             # 静音也要照常写入（零数据），否则流会积压、恢复时一下涌出来
             stream.write(b"\x00" * len(data))
             return
-        if volume < 0.999:
+        if abs(volume - 1.0) > 0.001:
+            # 大于 1 就是增益：摄像头麦克风本来就轻，只靠系统音量常常推不上去
             try:
                 import numpy as np
 
@@ -148,7 +166,8 @@ class CameraAudio(QObject):
         self._state = {"stop": True, "volume": 1.0}
         self._worker: _AudioWorker | None = None
         self._muted = False
-        self._volume = 0.8
+        # 沿用本次运行里上次调好的音量（默认 100%）
+        self._volume = shared_volume()
         self._lock = threading.Lock()
 
     # ---- 状态 ----
@@ -166,9 +185,14 @@ class CameraAudio(QObject):
         self._state["volume"] = 0.0 if self._muted else self._volume
 
     def set_volume(self, volume: float) -> None:
-        self._volume = max(0.0, min(1.0, float(volume)))
+        self._volume = max(0.0, min(MAX_VOLUME, float(volume)))
+        remember_volume(self._volume)
         if not self._muted:
             self._state["volume"] = self._volume
+
+    @property
+    def volume(self) -> float:
+        return self._volume
 
     # ---- 播放 ----
     def play(self, url: str) -> None:
