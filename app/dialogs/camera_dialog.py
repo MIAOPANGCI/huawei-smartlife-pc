@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import audio as audio_module
 from ..theme import theme
 from ..widgets import motion
 from ..widgets.glyph_icons import make_icon
@@ -365,6 +366,9 @@ class CameraDialog(QDialog):
         self._size_text = "—"
         self._scanned = False
         self._probe: _StreamProbe | None = None
+        # 声音单独一路：cv2 只解视频，音轨由 CameraAudio 自己开（见 app/audio.py）
+        self._audio = audio_module.CameraAudio(self)
+        self._audio.failed.connect(self._on_audio_failed)
         # 识别出的通道：{"main": "onvif1", "sub": "onvif2"}，空表示按默认映射
         self._paths: dict[str, str] = {}
         self._slid_in = False
@@ -561,7 +565,33 @@ class CameraDialog(QDialog):
         self._metrics = QLabel("")
         self._metrics.setObjectName("Caption")
         row.addWidget(self._metrics)
+
+        self._audio_btn = QPushButton()
+        self._audio_btn.setObjectName("TitleButton")
+        self._audio_btn.setFixedSize(26, 22)
+        self._audio_btn.setFlat(True)
+        self._audio_btn.setCursor(Qt.PointingHandCursor)
+        self._audio_btn.setIconSize(QSize(14, 14))
+        self._audio_btn.clicked.connect(self._toggle_audio)
+        self._refresh_audio_icon()
+        ok, reason = audio_module.available()
+        if not ok:
+            # 依赖不全时按钮没意义，藏起来比摆个点不动的强
+            self._audio_btn.hide()
+            self._audio_btn.setToolTip(reason)
+        row.addWidget(self._audio_btn)
         return row
+
+    def _refresh_audio_icon(self) -> None:
+        muted = self._audio.muted
+        self._audio_btn.setIcon(
+            make_icon("mute" if muted else "sound", theme().palette.text_2, 14)
+        )
+        self._audio_btn.setToolTip("已静音，点一下开声音" if muted else "静音")
+
+    def _toggle_audio(self) -> None:
+        self._audio.set_muted(not self._audio.muted)
+        self._refresh_audio_icon()
 
     def _build_form(self) -> QGridLayout:
         grid = QGridLayout()
@@ -784,6 +814,8 @@ class CameraDialog(QDialog):
         self._grabber.start()
 
     def stop(self) -> None:
+        # 先停声音：画面断掉后声音还在响会很怪
+        self._audio.stop()
         grabber = self._grabber
         self._grabber = None
         if grabber is None:
@@ -800,8 +832,26 @@ class CameraDialog(QDialog):
     def _on_opened(self, width: int, height: int) -> None:
         self._size_text = f"{width}×{height}" if width and height else "未知分辨率"
         self._set_status("播放中", "ok")
+        self._start_audio()
+
+    def _start_audio(self) -> None:
+        """画面通了再开声音：先有画面确认地址对，音频再连一次才有意义。"""
+        if self._camera is None or not self._audio_btn.isVisibleTo(self):
+            return
+        ok, reason = audio_module.available()
+        if not ok:
+            self._audio_btn.setEnabled(False)
+            self._audio_btn.setToolTip(reason)
+            return
+        self._audio.play(self._camera.rtsp_url)
+
+    def _on_audio_failed(self, message: str) -> None:
+        # 声音出问题不影响画面，标在按钮上别打断正在看的人
+        self._audio_btn.setEnabled(False)
+        self._audio_btn.setToolTip(message)
 
     def _on_failed(self, message: str) -> None:
+        self._audio.stop()
         self._set_status(message, "error")
         self._view.set_hint(f"{message}\n\n检查后点「连接」重试")
         self._metrics.setText("")

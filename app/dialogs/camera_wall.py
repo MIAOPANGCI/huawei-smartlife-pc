@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from huawei_smartlife.camera import RtspCamera
 
+from .. import audio as audio_module
 from ..theme import theme
 from ..widgets.glyph_icons import make_icon
 from .camera_dialog import FrameGrabber, VideoView, have_opencv
@@ -62,6 +63,7 @@ class _Tile(QFrame):
 
     remove_requested = Signal(str)
     double_clicked = Signal()
+    audio_toggled = Signal(str)
 
     def __init__(self, target: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -72,6 +74,8 @@ class _Tile(QFrame):
         self._target = target
         self._key = str(target.get("key") or "")
         self._grabber: FrameGrabber | None = None
+        self._audio = audio_module.CameraAudio(self)
+        self._audio.failed.connect(self._on_audio_failed)
         self._frames = 0
         self._fps = 0.0
         self._fps_from = time.monotonic()
@@ -100,6 +104,21 @@ class _Tile(QFrame):
         self._status = QLabel("连接中…")
         self._status.setObjectName("TileStatus")
         bar_layout.addWidget(self._status)
+
+        self._audio_btn = QPushButton()
+        self._audio_btn.setObjectName("TileClose")
+        self._audio_btn.setFixedSize(20, 20)
+        self._audio_btn.setCursor(Qt.PointingHandCursor)
+        self._audio_btn.setIconSize(QSize(13, 13))
+        self._audio_btn.setToolTip("听这一路的声音")
+        self._audio_btn.clicked.connect(lambda: self.audio_toggled.emit(self._key))
+        ok, reason = audio_module.available()
+        if ok:
+            bar_layout.addWidget(self._audio_btn)
+            self._refresh_audio_icon()
+        else:
+            self._audio_btn.hide()
+            self._audio_btn.setToolTip(reason)
 
         remove = QPushButton("×")
         remove.setObjectName("TileClose")
@@ -147,6 +166,7 @@ class _Tile(QFrame):
 
     def stop(self) -> None:
         self._timer.stop()
+        self._audio.stop()
         grabber = self._grabber
         self._grabber = None
         if grabber is None:
@@ -190,6 +210,43 @@ class _Tile(QFrame):
         widget.style().unpolish(widget)
         widget.style().polish(widget)
 
+    # ---- 声音 ----
+    @property
+    def audio_on(self) -> bool:
+        return self._audio.playing
+
+    def set_audio(self, on: bool) -> None:
+        """开/关这一路的声音。多路同屏里由窗口保证同时只有一路在响。"""
+        if not on:
+            self._audio.stop()
+            self._refresh_audio_icon()
+            return
+        url = _rtsp_url(self._target)
+        if url is None:
+            self._audio_btn.setEnabled(False)
+            self._audio_btn.setToolTip("这路还没填地址")
+            return
+        ok, reason = audio_module.available()
+        if not ok:
+            self._audio_btn.setEnabled(False)
+            self._audio_btn.setToolTip(reason)
+            return
+        self._audio.play(url)
+        self._refresh_audio_icon()
+
+    def _refresh_audio_icon(self) -> None:
+        on = self.audio_on
+        self._audio_btn.setIcon(
+            make_icon("sound" if on else "mute", theme().palette.text_2, 13)
+        )
+        self._audio_btn.setToolTip("关掉这一路的声音" if on else "听这一路的声音")
+
+    def _on_audio_failed(self, message: str) -> None:
+        # 声音失败不影响画面，标在按钮上就行
+        self._audio_btn.setEnabled(False)
+        self._audio_btn.setToolTip(message)
+        self._refresh_audio_icon()
+
     def eventFilter(self, obj, event):  # noqa: N802 - Qt 接口
         if obj is self._view and event.type() == QEvent.MouseButtonDblClick:
             self.double_clicked.emit()
@@ -212,6 +269,8 @@ class CameraWall(QDialog):
         self._targets = [dict(item) for item in targets]
         self._tiles: dict[str, _Tile] = {}
         self._placeholder: QLabel | None = None
+        # 同一时刻只允许一路出声（再多就是噪音了）
+        self._audio_key = ""
         self._drag_offset = None
         available = {str(item.get("key")) for item in self._targets}
         # 上次的选择可能包含已经删掉的摄像头，过滤掉
@@ -389,6 +448,7 @@ class CameraWall(QDialog):
                 tile = _Tile(by_key[key], self._grid_host)
                 tile.remove_requested.connect(self._remove)
                 tile.double_clicked.connect(self._toggle_fullscreen)
+                tile.audio_toggled.connect(self._on_tile_audio)
                 self._tiles[key] = tile
                 fresh.append(key)
 
@@ -480,15 +540,38 @@ class CameraWall(QDialog):
     def _remove(self, key: str) -> None:
         if key in self._selection:
             self._selection.remove(key)
+            if self._audio_key == key:
+                self._audio_key = ""
             self._relayout()
             self.selection_changed.emit(list(self._selection))
+
+    def _on_tile_audio(self, key: str) -> None:
+        """点某格的喇叭：要么关掉它，要么把它打开、同时把别的关掉。
+
+        几台一起响根本分不清是哪来的声音，还会盖住你要听的那一路。
+        """
+        tile = self._tiles.get(key)
+        if tile is None:
+            return
+        if tile.audio_on:
+            tile.set_audio(False)
+            if self._audio_key == key:
+                self._audio_key = ""
+            return
+        for other_key, other in self._tiles.items():
+            if other_key != key:
+                other.set_audio(False)
+        tile.set_audio(True)
+        self._audio_key = key if tile.audio_on else ""
 
     # ---- 生命周期 ----
     def selection(self) -> list[str]:
         return list(self._selection)
 
     def stop_all(self) -> None:
+        self._audio_key = ""
         for tile in self._tiles.values():
+            tile.set_audio(False)
             tile.stop()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt 接口

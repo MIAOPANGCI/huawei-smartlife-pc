@@ -191,6 +191,74 @@ def _migrate_autostart() -> None:
         _LOGGER.debug("迁移开机自启动项失败", exc_info=True)
 
 
+def _run_audio_test() -> int:
+    """诊断用：拿配置里第一台摄像头播 6 秒，把结果写进日志。
+
+    pythonw / 打包版都没有控制台，所以结果只能落 ``app.log``。
+    用户报"没声音"时让他跑一次 ``HuaweiSmartLife.exe --audio-test``，日志里就能
+    看出是缺依赖、没配地址，还是这路流根本没有音轨。
+    """
+    import json
+
+    from PySide6.QtCore import QCoreApplication, QTimer
+
+    from huawei_smartlife.camera import RtspCamera
+
+    from .audio import CameraAudio, available
+    from .controller import UI_SETTINGS_PATH
+
+    ok, reason = available()
+    _LOGGER.info("音频自检：依赖%s %s", "就绪" if ok else "缺失", reason)
+    if not ok:
+        return 1
+
+    try:
+        with open(UI_SETTINGS_PATH, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        _LOGGER.error("音频自检：读不到设置文件")
+        return 1
+
+    cameras = data.get("cameras") or {}
+    entry = next(
+        (
+            item
+            for item in cameras.values()
+            if isinstance(item, dict) and str(item.get("host") or "").strip()
+        ),
+        None,
+    )
+    if entry is None:
+        _LOGGER.error("音频自检：没有配好地址的摄像头")
+        return 1
+
+    stream = str(entry.get("stream") or "sub")
+    paths = entry.get("paths") if isinstance(entry.get("paths"), dict) else {}
+    camera = RtspCamera(
+        name="自检",
+        host=str(entry["host"]),
+        username=str(entry.get("username") or ""),
+        password=str(entry.get("password") or ""),
+        port=int(entry.get("port") or 554),
+        stream=stream,
+        path=str(paths.get(stream)) if paths.get(stream) else None,
+    )
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    audio = CameraAudio()
+    audio.failed.connect(lambda message: _LOGGER.error("音频自检失败：%s", message))
+    audio.playing_changed.connect(
+        lambda playing: _LOGGER.info("音频自检：播放状态 %s", playing)
+    )
+    _LOGGER.info("音频自检：开始播放 %s", camera.masked_url)
+    audio.play(camera.rtsp_url)
+    QTimer.singleShot(6000, app.quit)
+    app.exec()
+    audio.stop()
+    _LOGGER.info("音频自检：结束")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """启动 GUI，返回进程退出码。"""
     args, start_hidden = parse_launch_args(list(argv if argv is not None else sys.argv))
@@ -207,6 +275,9 @@ def main(argv: list[str] | None = None) -> int:
         code = apply_update(args)
         _LOGGER.info("替换结束，退出码 %s", code)
         return code
+
+    if "--audio-test" in args:
+        return _run_audio_test()
 
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

@@ -155,6 +155,31 @@ def _draw_power(p: QPainter) -> None:
     p.drawLine(QPointF(9.0, 2.4), QPointF(9.0, 8.0))
 
 
+def _sound_body(p: QPainter) -> None:
+    """喇叭本体：左侧短矩形 + 朝右的三角。"""
+    path = QPainterPath()
+    path.moveTo(QPointF(2.8, 7.2))
+    path.lineTo(QPointF(5.8, 7.2))
+    path.lineTo(QPointF(9.2, 3.8))
+    path.lineTo(QPointF(9.2, 14.2))
+    path.lineTo(QPointF(5.8, 10.8))
+    path.lineTo(QPointF(2.8, 10.8))
+    path.closeSubpath()
+    p.drawPath(path)
+
+
+def _draw_sound(p: QPainter) -> None:
+    _sound_body(p)
+    p.drawArc(QRectF(9.0, 6.0, 4.6, 6.0), -60 * 16, 120 * 16)
+    p.drawArc(QRectF(9.0, 4.0, 7.4, 10.0), -55 * 16, 110 * 16)
+
+
+def _draw_mute(p: QPainter) -> None:
+    _sound_body(p)
+    p.drawLine(QPointF(11.6, 6.8), QPointF(15.8, 11.2))
+    p.drawLine(QPointF(15.8, 6.8), QPointF(11.6, 11.2))
+
+
 _DRAWERS = {
     "refresh": _draw_refresh,
     "logs": _draw_logs,
@@ -177,6 +202,8 @@ _DRAWERS = {
     "sliders": _draw_sliders,
     "plus": _draw_plus,
     "minus": _draw_minus,
+    "sound": _draw_sound,
+    "mute": _draw_mute,
 }
 
 
