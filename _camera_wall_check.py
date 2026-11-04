@@ -82,24 +82,37 @@ def main() -> int:
     check("线程都处于运行态", all(item.running for item in FakeGrabber.instances))
 
     # ---- 2. 格数排布 ----
-    check("3 路用 2×2 网格", wall._grid.rowCount() <= 2 and wall._grid.columnCount() == 2)
+    positions = sorted(wall._grid.getItemPosition(i)[:2] for i in range(wall._grid.count()))
+    check("3 路按 2 列排（2×2）", positions == [(0, 0), (0, 1), (1, 0)])
 
-    # ---- 3. 增删 ----
+    # ---- 3. 增删：只动变动的那一格 ----
     added: list[list[str]] = []
     wall.selection_changed.connect(added.append)
-    wall._add("cam-living")
-    check("加一路后选择更新", "cam-living" in wall.selection())
-    check("加一路会通知外部（用于持久化）", added and "cam-living" in added[-1])
-    check("4 路时右下角补满 2×2", wall._grid.count() == 4)
 
-    wall._remove("cam-living")
-    check("移除后选择少一个", "cam-living" not in wall.selection())
-    check("移除后通知外部", added[-1] == ["cam-door", "cam-yard", "cam-garage"])
+    wall._remove("cam-garage")                  # 3 路 → 2 路
+    check("删到 2 路后空行不再抢高度", wall._grid.rowStretch(1) == 0)
+    check("2 路时窗口高度跟着收", wall.height() < 500)
+    positions = sorted(wall._grid.getItemPosition(i)[:2] for i in range(wall._grid.count()))
+    check("2 路横向并排", positions == [(0, 0), (0, 1)])
 
-    # ---- 4. 未配置的那路 ----
+    total_before = len(FakeGrabber.instances)
+    before = [item for item in FakeGrabber.instances if item.running]
+    wall._add("cam-garage")                     # 2 路 → 3 路（已配置的，会真连）
+    check("加一路只新增一个读帧线程", len(FakeGrabber.instances) == total_before + 1)
+    check("原有几路没有被重连", all(item.running for item in before))
+    check("加一路会通知外部（用于持久化）", added and added[-1][-1] == "cam-garage")
+
+    last = FakeGrabber.instances[-1]
+    wall._remove("cam-garage")
+    check("移除只停掉被删那一格", not last.running)
+    check("其余几路还在跑", all(item.running for item in before))
+    check("移除后通知外部", added[-1] == ["cam-door", "cam-yard"])
+
+    # ---- 3b. 未配置的那台只占格不连流 ----
+    count_before = len(FakeGrabber.instances)
     wall._add("cam-living")
-    tile = wall._tiles["cam-living"]
-    check("未配置的格子给出提示而不是崩", "没" in tile._view._hint or "地址" in tile._view._hint)
+    check("未配置的格子不会起读帧线程", len(FakeGrabber.instances) == count_before)
+    check("未配置的格子给出提示而不是崩", "地址" in wall._tiles["cam-living"]._view._hint)
     wall._remove("cam-living")
 
     # ---- 5. 上限 ----

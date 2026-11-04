@@ -203,6 +203,7 @@ class CameraWall(QDialog):
         super().__init__(parent)
         self._targets = [dict(item) for item in targets]
         self._tiles: dict[str, _Tile] = {}
+        self._placeholder: QLabel | None = None
         self._drag_offset = None
         available = {str(item.get("key")) for item in self._targets}
         # 上次的选择可能包含已经删掉的摄像头，过滤掉
@@ -215,7 +216,7 @@ class CameraWall(QDialog):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self._build()
-        self._rebuild()
+        self._relayout()
 
     # ---- 构建 ----
     def _default_selection(self) -> list[str]:
@@ -309,56 +310,96 @@ class CameraWall(QDialog):
         self._drag_offset = None
 
     # ---- 网格 ----
-    def _rebuild(self) -> None:
-        for tile in self._tiles.values():
-            tile.stop()
-            tile.setParent(None)
-            tile.deleteLater()
-        self._tiles.clear()
-        while self._grid.count():
-            item = self._grid.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+    def _relayout(self) -> None:
+        """按当前选择重排格子。
 
-        count = len(self._selection)
-        if not count:
-            placeholder = QLabel("还没有可看的摄像头\n先在设备里配好地址，或点右上角「+ 添加」")
-            placeholder.setObjectName("Caption")
-            placeholder.setAlignment(Qt.AlignCenter)
-            self._grid.addWidget(placeholder, 0, 0)
+        只做增量的部分：删掉的停下并销毁，新加的建出来开局，**已经在放的那几路
+        只是挪个位置**——早先的写法是全部销毁重建，等于每加/删一路就把所有摄像头
+        重连一遍，看着就像全在闪。
+        """
+        by_key = {str(item.get("key")): item for item in self._targets}
+        wanted = [key for key in self._selection if key in by_key]
+
+        # 1. 移除不再需要的格子（只停这一个）
+        for key in list(self._tiles):
+            if key not in wanted:
+                tile = self._tiles.pop(key)
+                tile.stop()
+                tile.setParent(None)
+                tile.deleteLater()
+
+        if not wanted:
             self._title.setText("多路同屏")
             self.resize(520, 260)
+            self._show_placeholder()
             return
+        self._clear_placeholder()
 
-        columns = max(1, math.ceil(math.sqrt(count)))
-        rows = max(1, math.ceil(count / columns))
-        by_key = {str(item.get("key")): item for item in self._targets}
+        # 2. 新加的格子：先建好，排完版再开局
+        fresh: list[str] = []
+        for key in wanted:
+            if key not in self._tiles:
+                tile = _Tile(by_key[key], self._grid_host)
+                tile.remove_requested.connect(self._remove)
+                self._tiles[key] = tile
+                fresh.append(key)
 
-        for index, key in enumerate(self._selection):
-            target = by_key.get(key)
-            if target is None:
-                continue
-            tile = _Tile(target, self._grid_host)
-            tile.remove_requested.connect(self._remove)
-            self._grid.addWidget(tile, index // columns, index % columns)
-            self._tiles[key] = tile
-            tile.start()
+        columns = max(1, math.ceil(math.sqrt(len(wanted))))
+        rows = max(1, math.ceil(len(wanted) / columns))
+        self._layout_tiles(wanted, columns)
 
-        for column in range(columns):
-            self._grid.setColumnStretch(column, 1)
-        for row in range(rows):
-            self._grid.setRowStretch(row, 1)
+        for key in fresh:
+            self._tiles[key].start()
 
-        self._title.setText(f"多路同屏 · {count} 路")
+        self._title.setText(f"多路同屏 · {len(wanted)} 路")
         # 单格至少 480×270（16:9），再小就看不清车牌/人脸这类细节了
+        count = len(wanted)
         tile_w = 480 if count > 1 else 820
         tile_h = 270 if count > 1 else 462
         self.resize(
             min(1800, columns * tile_w + (columns - 1) * 10 + 24 + 28),
             min(1150, rows * tile_h + (rows - 1) * 10 + 24 + 44 + 28),
         )
+
+    def _layout_tiles(self, wanted: list[str], columns: int) -> None:
+        """把格子摆进网格。
+
+        QGridLayout 没有"删掉某一行"的接口，而 ``setRowStretch`` 会把网格撑到
+        那个行号。所以每次重排都要**把已有行的 stretch 全部归零**再按新行数设 1：
+        腾空的行 stretch 为 0、高度就是 0，不会继续分走空间——4 路删到 2 路时
+        画面被挤成一条窄带、下面空一大片，根因就是旧的 stretch 一直留着。
+        """
+        grid = self._grid
+        for tile in self._tiles.values():
+            grid.removeWidget(tile)
+
+        for index in range(max(grid.rowCount(), MAX_TILES)):
+            grid.setRowStretch(index, 0)
+        for index in range(max(grid.columnCount(), MAX_TILES)):
+            grid.setColumnStretch(index, 0)
+
+        for index, key in enumerate(wanted):
+            grid.addWidget(self._tiles[key], index // columns, index % columns)
+        for column in range(columns):
+            grid.setColumnStretch(column, 1)
+        for row in range(max(1, math.ceil(len(wanted) / columns))):
+            grid.setRowStretch(row, 1)
+
+    def _show_placeholder(self) -> None:
+        if self._placeholder is not None:
+            return
+        label = QLabel("还没有可看的摄像头\n点右上角「+ 添加」补一路")
+        label.setObjectName("Caption")
+        label.setAlignment(Qt.AlignCenter)
+        self._grid.addWidget(label, 0, 0)
+        self._placeholder = label
+
+    def _clear_placeholder(self) -> None:
+        if self._placeholder is None:
+            return
+        self._placeholder.setParent(None)
+        self._placeholder.deleteLater()
+        self._placeholder = None
 
     # ---- 选择 ----
     def _show_add_menu(self) -> None:
@@ -385,13 +426,13 @@ class CameraWall(QDialog):
         if not key or key in self._selection or len(self._selection) >= MAX_TILES:
             return
         self._selection.append(key)
-        self._rebuild()
+        self._relayout()
         self.selection_changed.emit(list(self._selection))
 
     def _remove(self, key: str) -> None:
         if key in self._selection:
             self._selection.remove(key)
-            self._rebuild()
+            self._relayout()
             self.selection_changed.emit(list(self._selection))
 
     # ---- 生命周期 ----
