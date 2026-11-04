@@ -17,6 +17,7 @@ class TrayController(QObject):
     open_panel = Signal()
     open_main = Signal()
     open_board = Signal()
+    open_wall = Signal()
     quit_requested = Signal()
 
     def __init__(self, icon: QIcon, parent: QObject | None = None) -> None:
@@ -28,6 +29,7 @@ class TrayController(QObject):
         menu.addAction("打开主界面", self.open_main.emit)
         menu.addAction("托盘面板", self.open_panel.emit)
         menu.addAction("桌面挂件", self.open_board.emit)
+        menu.addAction("多路同屏", self.open_wall.emit)
         menu.addSeparator()
         menu.addAction("退出", self.quit_requested.emit)
         self._menu = menu

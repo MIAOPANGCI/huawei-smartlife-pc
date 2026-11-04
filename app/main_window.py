@@ -30,6 +30,7 @@ from . import device_spec
 from . import autostart
 from . import updater
 from .dialogs.camera_dialog import CameraDialog
+from .dialogs.camera_wall import CameraWall
 from .dialogs.device_dialog import DeviceDialog
 from .dialogs.device_picker import DevicePickerDialog
 from .dialogs.settings_dialog import SettingsDialog
@@ -60,6 +61,8 @@ class MainWindow(QMainWindow):
         self._device_dialog: DeviceDialog | None = None
         # 每台摄像头一个独立窗口：客厅和门口可以同时看，不互相顶掉
         self._camera_dialogs: dict[str, CameraDialog] = {}
+        # 多路同屏（单实例；关掉再开会重建）
+        self._camera_wall: CameraWall | None = None
         # 挂件旁的快捷画面浮层（懒加载，关闭后保留实例，下次直接重连）
         self._camera_popup: CameraPopup | None = None
         self._settings: dict = self._load_settings()
@@ -168,6 +171,7 @@ class MainWindow(QMainWindow):
         self.tray.open_panel.connect(self._show_tray_panel)
         self.tray.open_main.connect(self._show_main_window)
         self.tray.open_board.connect(self._show_board)
+        self.tray.open_wall.connect(self._open_camera_wall)
         self.tray.quit_requested.connect(self._quit_app)
 
         self.tray_panel.power_requested.connect(self._on_power_requested)
@@ -749,6 +753,40 @@ class MainWindow(QMainWindow):
         dialog.show()
         self._center_dialog(dialog)
 
+    def _open_camera_wall(self) -> None:
+        """多路同屏：一个窗口里同时看几台摄像头。
+
+        和「每台一个窗口」不冲突——那个适合盯一台调参数，这个适合同时扫一眼。
+        选中的组合记在 settings 里，下次打开还是这几路。
+        """
+        targets = self._camera_targets()
+        if not targets:
+            self.toast.show_toast("还没有可看的摄像头，先在设备里配好地址", "warning")
+            return
+
+        existing = self._camera_wall
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            existing.activateWindow()
+            return
+        if existing is not None:
+            # 上次关掉的窗口：先停掉读帧线程再丢掉，别让它挂在后台
+            existing.stop_all()
+            existing.deleteLater()
+            self._camera_wall = None
+
+        stored = self._settings.get("camera_wall")
+        selection = [str(key) for key in stored] if isinstance(stored, list) else None
+        wall = CameraWall(targets, selection, self)
+        wall.selection_changed.connect(self._save_camera_wall_selection)
+        self._camera_wall = wall
+        wall.show()
+        self._center_dialog(wall)
+
+    def _save_camera_wall_selection(self, selection: list) -> None:
+        self._settings["camera_wall"] = [str(key) for key in selection]
+        self._save_settings()
+
     def _open_manual_camera(self) -> None:
         """打开「手动添加的网络摄像头」窗口。
 
@@ -1050,6 +1088,9 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - 退出阶段忽略断开异常
             pass
         self.board.hide()
+        if self._camera_wall is not None:
+            # 每路一个解码线程，退出前必须停掉，否则进程会拖着不退
+            self._camera_wall.stop_all()
         self.tray_panel.hide()
         self.tray.hide()
         super().closeEvent(event)

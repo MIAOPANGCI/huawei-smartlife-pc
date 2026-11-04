@@ -863,9 +863,43 @@ QDialog {
 #DialogTitle {
     font-size: 15px;
     font-weight: 600;
+    color: @text;
 }
 #DialogButtonBar {
     background: @bg_elev;
+}
+
+/* ---------------- 多路同屏 ---------------- */
+#CameraTile {
+    background: #0a0c10;
+    border: 1px solid @border_soft;
+    border-radius: @radius_md;
+}
+#TileBar {
+    background: @surface;
+    border-top-left-radius: @radius_md;
+    border-top-right-radius: @radius_md;
+}
+#TileName {
+    color: @text;
+    font-size: 12px;
+    font-weight: 600;
+}
+#TileStatus {
+    color: @text_3;
+    font-size: 11px;
+}
+#TileClose {
+    background: transparent;
+    border: none;
+    color: @text_3;
+    font-size: 15px;
+    padding: 0;
+}
+#TileClose:hover {
+    background: @accent_soft;
+    color: @text;
+    border-radius: 10px;
 }
 
 /* ---------------- 表格/列表（场景） ---------------- */
