@@ -129,6 +129,20 @@ def test_wall(app: QApplication) -> None:
     app.processEvents()
     check("再按 ESC 退回", wall.isFullScreen() is False)
 
+    # ---- 全屏状态下删光所有格子 ----
+    # 曾经这样删完只剩一句"点右上角 + 添加"，而标题栏还在全屏的隐藏状态里，
+    # 按钮根本不存在，等于卡死在一个空窗口
+    wall._toggle_fullscreen()
+    app.processEvents()
+    check("先进入全屏", wall.isFullScreen() is True)
+    for key in list(wall.selection()):
+        wall._remove(key)
+    app.processEvents()
+    check("全屏下删光会自动退出全屏", wall.isFullScreen() is False)
+    check("删光后标题栏回来了（能点 + 添加）", wall._titlebar.isVisible())
+    check("删光后显示空态提示", wall._placeholder is not None)
+    check("空态下窗口收成小尺寸", wall.width() < 700)
+
     wall.close()
 
 

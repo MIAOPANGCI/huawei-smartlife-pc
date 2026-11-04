@@ -376,7 +376,14 @@ class CameraWall(QDialog):
     # ---- 全屏 ----
     def _toggle_fullscreen(self) -> None:
         """整窗全屏：收起标题栏，格子按比例铺满整块屏幕。"""
-        full = not self.isFullScreen()
+        self._set_fullscreen(not self.isFullScreen())
+
+    def _set_fullscreen(self, full: bool) -> None:
+        """显式设置全屏状态。
+
+        不写成"翻转"是给空态用的：删光格子时窗口可能还停在全屏，而全屏时标题栏
+        是藏着的——不主动还原，用户就只剩一句"点右上角 + 添加"、按钮却不存在。
+        """
         self._titlebar.setVisible(not full)
         margins = (0, 0, 0, 0) if full else (14, 14, 14, 14)
         self._shell.setContentsMargins(*margins)
@@ -435,6 +442,9 @@ class CameraWall(QDialog):
                 tile.deleteLater()
 
         if not wanted:
+            # 无条件还原：全屏时标题栏是藏起来的，只 resize 不会让它回来，
+            # 用户会看到一个只有提示文字、连「+ 添加」都没有的空窗口
+            self._set_fullscreen(False)
             self._title.setText("多路同屏")
             self.resize(520, 260)
             self._show_placeholder()
