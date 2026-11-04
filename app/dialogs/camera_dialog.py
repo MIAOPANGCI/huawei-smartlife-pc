@@ -21,7 +21,7 @@ os.environ.setdefault(
     "OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|stimeout;5000000"
 )
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QThread, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
@@ -400,8 +400,8 @@ class CameraDialog(QDialog):
     # 构建
     # ==================================================================
     def _build(self) -> None:
-        shell = QVBoxLayout(self)
-        shell.setContentsMargins(14, 14, 14, 14)
+        self._shell = QVBoxLayout(self)
+        self._shell.setContentsMargins(14, 14, 14, 14)
 
         surface = QFrame()
         surface.setObjectName("DialogSurface")
@@ -410,12 +410,15 @@ class CameraDialog(QDialog):
         shadow.setOffset(0, 10)
         shadow.setColor(Qt.black)
         surface.setGraphicsEffect(shadow)
-        shell.addWidget(surface)
+        self._surface = surface
+        self._shadow = shadow
+        self._shell.addWidget(surface)
 
         layout = QVBoxLayout(surface)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self._build_titlebar())
+        self._titlebar = self._build_titlebar()
+        layout.addWidget(self._titlebar)
 
         body = QVBoxLayout()
         body.setContentsMargins(18, 10, 18, 14)
@@ -429,11 +432,20 @@ class CameraDialog(QDialog):
 
         self._view = VideoView()
         self._view.set_hint("填好下面四项，点「连接」开始拉流")
+        self._view.installEventFilter(self)      # 双击画面切全屏
         body.addWidget(self._view, 1)
 
-        body.addLayout(self._build_status_row())
-        body.addLayout(self._build_form())
-        body.addLayout(self._build_actions())
+        # 状态行 / 配置表单 / 操作按钮包成一个整体：全屏时一次性隐藏，
+        # 否则得逐个 hide，还容易漏掉某个 layout（QHBoxLayout 不能 hide）
+        self._chrome_bottom = QWidget()
+        bottom = QVBoxLayout(self._chrome_bottom)
+        bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.setSpacing(10)
+        bottom.addLayout(self._build_status_row())
+        bottom.addLayout(self._build_form())
+        bottom.addLayout(self._build_actions())
+        body.addWidget(self._chrome_bottom)
+
         layout.addLayout(body, 1)
 
     def _build_titlebar(self) -> QWidget:
@@ -447,6 +459,18 @@ class CameraDialog(QDialog):
         title.setObjectName("DialogTitle")
         layout.addWidget(title)
         layout.addStretch(1)
+
+        full = QPushButton()
+        full.setObjectName("TitleButton")
+        full.setFixedSize(32, 28)
+        full.setFlat(True)
+        full.setCursor(Qt.PointingHandCursor)
+        full.setToolTip("全屏（双击画面也可以）")
+        full.setIconSize(QSize(15, 15))
+        full.setIcon(make_icon("maximize", theme().palette.text_2, 15))
+        full.clicked.connect(self._toggle_fullscreen)
+        self._full_btn = full
+        layout.addWidget(full)
 
         close = QPushButton()
         close.setObjectName("TitleButtonClose")
@@ -476,6 +500,50 @@ class CameraDialog(QDialog):
 
     def _bar_release(self, event) -> None:
         self._drag_offset = None
+
+    # ---- 全屏 ----
+    def _toggle_fullscreen(self) -> None:
+        """进/出全屏：全屏时只留画面。
+
+        表单和按钮全收起来——大屏看画面时它们只会占地方；退出靠 Esc、
+        标题栏按钮（全屏时隐藏）之外的入口是双击画面本身。
+        """
+        full = not self.isFullScreen()
+        self._titlebar.setVisible(not full)
+        self._tip.setVisible(not full)
+        self._chrome_bottom.setVisible(not full)
+
+        # 全屏还留着 14px 外边距和阴影的话，画面四周会有一圈黑边、边缘还发虚
+        margins = (0, 0, 0, 0) if full else (14, 14, 14, 14)
+        self._shell.setContentsMargins(*margins)
+        self._shadow.setEnabled(not full)
+
+        self._full_btn.setIcon(
+            make_icon("restore" if full else "maximize", theme().palette.text_2, 15)
+        )
+        self._full_btn.setToolTip(
+            "退出全屏（Esc）" if full else "全屏（双击画面也可以）"
+        )
+        if full:
+            self.showFullScreen()
+        else:
+            self.showNormal()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt 接口
+        if event.key() == Qt.Key_Escape:
+            if self.isFullScreen():
+                self._toggle_fullscreen()
+            # 非全屏时也把 ESC 吃掉：QDialog 默认会关窗，而正在盯画面的人
+            # 误按一下就没了，还得回去重新点开那一台
+            return
+        super().keyPressEvent(event)
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt 接口
+        # 双击画面切全屏：看画面时手已经在鼠标上，不用再去点标题栏
+        if obj is self._view and event.type() == QEvent.MouseButtonDblClick:
+            self._toggle_fullscreen()
+            return True
+        return super().eventFilter(obj, event)
 
     def _build_status_row(self) -> QHBoxLayout:
         row = QHBoxLayout()

@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 import time
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
     QDialog,
@@ -61,6 +61,7 @@ class _Tile(QFrame):
     """一格画面：顶部名字条 + 状态，下面是 VideoView。"""
 
     remove_requested = Signal(str)
+    double_clicked = Signal()
 
     def __init__(self, target: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -111,6 +112,7 @@ class _Tile(QFrame):
 
         self._view = VideoView(minimum=(200, 112))
         self._view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._view.installEventFilter(self)      # 双击任一格都切整窗全屏
         layout.addWidget(self._view, 1)
 
         self._timer = QTimer(self)
@@ -188,6 +190,12 @@ class _Tile(QFrame):
         widget.style().unpolish(widget)
         widget.style().polish(widget)
 
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt 接口
+        if obj is self._view and event.type() == QEvent.MouseButtonDblClick:
+            self.double_clicked.emit()
+            return True
+        return super().eventFilter(obj, event)
+
 
 class CameraWall(QDialog):
     """多路同屏窗口。"""
@@ -229,8 +237,8 @@ class CameraWall(QDialog):
         return configured[:4] or [str(item.get("key")) for item in self._targets[:1]]
 
     def _build(self) -> None:
-        shell = QVBoxLayout(self)
-        shell.setContentsMargins(14, 14, 14, 14)
+        self._shell = QVBoxLayout(self)
+        self._shell.setContentsMargins(14, 14, 14, 14)
 
         surface = QFrame()
         surface.setObjectName("DialogSurface")
@@ -239,12 +247,14 @@ class CameraWall(QDialog):
         shadow.setOffset(0, 10)
         shadow.setColor(Qt.black)
         surface.setGraphicsEffect(shadow)
-        shell.addWidget(surface)
+        self._shadow = shadow
+        self._shell.addWidget(surface)
 
         outer = QVBoxLayout(surface)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        outer.addWidget(self._build_titlebar())
+        self._titlebar = self._build_titlebar()
+        outer.addWidget(self._titlebar)
 
         self._grid_host = QWidget()
         self._grid = QGridLayout(self._grid_host)
@@ -272,6 +282,18 @@ class CameraWall(QDialog):
         self._add_btn.clicked.connect(self._show_add_menu)
         layout.addWidget(self._add_btn)
 
+        full = QPushButton()
+        full.setObjectName("TitleButton")
+        full.setFixedSize(32, 28)
+        full.setFlat(True)
+        full.setCursor(Qt.PointingHandCursor)
+        full.setToolTip("全屏（双击画面也可以）")
+        full.setIconSize(QSize(15, 15))
+        full.setIcon(make_icon("maximize", theme().palette.text_2, 15))
+        full.clicked.connect(self._toggle_fullscreen)
+        self._full_btn = full
+        layout.addWidget(full)
+
         close = QPushButton()
         close.setObjectName("TitleButtonClose")
         close.setFixedSize(32, 28)
@@ -289,10 +311,35 @@ class CameraWall(QDialog):
         return bar
 
     @staticmethod
-    def _icon_size():
-        from PySide6.QtCore import QSize
-
+    def _icon_size() -> QSize:
         return QSize(15, 15)
+
+    # ---- 全屏 ----
+    def _toggle_fullscreen(self) -> None:
+        """整窗全屏：收起标题栏，格子按比例铺满整块屏幕。"""
+        full = not self.isFullScreen()
+        self._titlebar.setVisible(not full)
+        margins = (0, 0, 0, 0) if full else (14, 14, 14, 14)
+        self._shell.setContentsMargins(*margins)
+        self._shadow.setEnabled(not full)
+        self._full_btn.setIcon(
+            make_icon("restore" if full else "maximize", theme().palette.text_2, 15)
+        )
+        self._full_btn.setToolTip(
+            "退出全屏（Esc）" if full else "全屏（双击画面也可以）"
+        )
+        if full:
+            self.showFullScreen()
+        else:
+            self.showNormal()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt 接口
+        if event.key() == Qt.Key_Escape:
+            if self.isFullScreen():
+                self._toggle_fullscreen()
+            # 非全屏也吃掉 ESC：默认行为是关窗，误触就把整屏画面关了
+            return
+        super().keyPressEvent(event)
 
     def _bar_press(self, event) -> None:
         if event.button() == Qt.LeftButton:
@@ -341,6 +388,7 @@ class CameraWall(QDialog):
             if key not in self._tiles:
                 tile = _Tile(by_key[key], self._grid_host)
                 tile.remove_requested.connect(self._remove)
+                tile.double_clicked.connect(self._toggle_fullscreen)
                 self._tiles[key] = tile
                 fresh.append(key)
 
