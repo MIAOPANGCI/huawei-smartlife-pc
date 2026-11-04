@@ -142,6 +142,9 @@ def main() -> int:
     controller.load_scenes = lambda: None
 
     hidden = MainWindow(controller, start_hidden=True)
+    # 这个窗口读的是用户真实的 ui_settings.json；下面会改 settings 并触发保存，
+    # 不挡住的话测试数据会写进用户的配置（曾经真的把 board_restore 写成 False）
+    hidden._save_settings = lambda: None
     check("隐藏启动时窗口默认不显示", hidden.isVisible() is False)
     QTest.qWait(700)      # _bootstrap 用 120ms 延时 + 线程池回收
     check("没有会话时自动显示登录窗口", hidden.isVisible() is True)

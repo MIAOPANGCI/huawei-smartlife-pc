@@ -315,6 +315,15 @@ class WidgetBoard(QWidget):
     def _schedule_state(self) -> None:
         self._state_timer.start()
 
+    def flush_state(self) -> None:
+        """立刻把当前状态抛出去。
+
+        平时靠 400ms 节流攒着（拖动时 moveEvent 一帧一发，不节流会写几十次配置），
+        但退出时得强制落一次——否则"拖完挂件马上关程序"这种情况，最后的位置就丢了，
+        下次启动回到上一个位置，看起来就像"位置记不住"。
+        """
+        self._emit_state()
+
     @property
     def locked(self) -> bool:
         return self._locked

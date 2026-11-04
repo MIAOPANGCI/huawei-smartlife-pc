@@ -419,11 +419,16 @@ class MainWindow(QMainWindow):
             return
         self._board_restored = True
         if not bool(self._settings.get("board_restore", True)):
+            _LOGGER.info("挂件恢复：设置里已关闭，跳过")
             return
         state = self._settings.get("board")
         if not isinstance(state, dict) or not state.get("visible"):
+            _LOGGER.info("挂件恢复：上次是关着的，跳过")
             return
         self._show_board()
+        _LOGGER.info(
+            "挂件恢复：按上次位置打开 (%s, %s)", state.get("x"), state.get("y")
+        )
 
     # ---- 自选设备与排序 ----
     def _edit_tray_devices(self) -> None:
@@ -1087,6 +1092,9 @@ class MainWindow(QMainWindow):
             self.controller.disconnect_mqtt()
         except Exception:  # noqa: BLE001 - 退出阶段忽略断开异常
             pass
+        # 退出前把挂件位置强制落一次盘：平时有 400ms 节流，
+        # 拖完立刻关程序的话最后一次位置会被吞掉，下次启动就回到旧位置
+        self.board.flush_state()
         self.board.hide()
         if self._camera_wall is not None:
             # 每路一个解码线程，退出前必须停掉，否则进程会拖着不退

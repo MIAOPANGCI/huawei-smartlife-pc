@@ -169,6 +169,17 @@ def main() -> int:
     app.processEvents()
     check("退出时的隐藏不触发 dismissed", dismissed == [True])
 
+    # ---- 12. 退出前强制落一次位置 ----
+    # 平时 400ms 节流，「拖完挂件立刻关程序」会丢掉最后一次位置
+    flush_board = wb.WidgetBoard({})
+    seen_state: list[dict] = []
+    flush_board.state_changed.connect(seen_state.append)
+    flush_board.move(400, 300)
+    check("节流期间不会立刻上报", seen_state == [])
+    flush_board.flush_state()
+    check("flush_state 立刻上报位置", len(seen_state) == 1 and seen_state[0]["x"] == 400)
+    flush_board.hide()
+
     print()
     print(f"通过 {len(PASSES)} / {len(PASSES) + len(FAILS)}")
     if FAILS:
