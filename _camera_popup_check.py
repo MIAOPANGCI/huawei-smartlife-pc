@@ -141,6 +141,8 @@ def main() -> int:
     check("点相机按钮弹出浮层", popup is not None and popup.isVisible())
     check("浮层贴着挂件弹出", popup.x() != 0 or popup.y() != 0)
     check("画面浮层开着时挂件不自动缩回", window.board._edge_paused is True)
+    check("浮层默认不出声（瞄一眼不该突然吵）", popup._audio.playing is False)
+    check("浮层顶栏有喇叭按钮", popup._audio_btn is not None and not popup._audio_btn.isHidden())
 
     # ---- 5. 未配置的目标给引导，不启动读帧线程 ----
     window._settings["cameras"].pop("dev-cam-yard", None)

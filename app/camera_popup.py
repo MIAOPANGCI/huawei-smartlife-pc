@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from huawei_smartlife.camera import RtspCamera, port_open
 
+from . import audio as audio_module
 from .dialogs.camera_dialog import FrameGrabber, VideoView, have_opencv
 from .theme import theme
 from .widgets.glyph_icons import make_icon
@@ -87,6 +88,10 @@ class CameraPopup(QWidget):
         self._fps_from = time.monotonic()
         self._size_text = "—"
         self._icon_buttons: list[tuple[QPushButton, str]] = []
+        self._audio = audio_module.CameraAudio(self)
+        self._audio.failed.connect(self._on_audio_failed)
+        # 用户在这个浮层里开过声音没有：切换摄像头时沿用，但每次重开浮层不重置
+        self._audio_wanted = False
         self._build()
         self.refresh_icons()
 
@@ -138,6 +143,17 @@ class CameraPopup(QWidget):
         self._config_btn.clicked.connect(self._on_configure)
         layout.addWidget(self._config_btn)
 
+        # 声音：浮层是"瞄一眼"用的，默认不吵人；点过喇叭就记住，下次打开沿用
+        self._audio_btn = QPushButton()
+        self._audio_btn.setObjectName("PopoverButton")
+        self._audio_btn.setFixedSize(24, 24)
+        self._audio_btn.setIconSize(QSize(14, 14))
+        self._audio_btn.setCursor(Qt.PointingHandCursor)
+        self._audio_btn.setFlat(True)
+        self._audio_btn.clicked.connect(self._toggle_audio)
+        layout.addWidget(self._audio_btn)
+        self._refresh_audio_icon()
+
         close_btn = self._icon_button("close", "关闭画面")
         close_btn.clicked.connect(self.hide)
         layout.addWidget(close_btn)
@@ -169,6 +185,51 @@ class CameraPopup(QWidget):
         self._icon_buttons.append((button, name))
         return button
 
+    # ---- 声音 ----
+    def _refresh_audio_icon(self) -> None:
+        on = self._audio.playing
+        self._audio_btn.setIcon(
+            make_icon("sound" if on else "mute", theme().palette.text_2, 14)
+        )
+        self._audio_btn.setToolTip("关掉这一路的声音" if on else "听这一路的声音")
+
+    def _toggle_audio(self) -> None:
+        if self._audio.playing:
+            self._audio.stop()
+            self._audio_wanted = False
+        else:
+            camera = self._camera
+            if camera is None:
+                self._audio_btn.setToolTip("画面还没连上，连上再点")
+                return
+            ok, reason = audio_module.available()
+            if not ok:
+                self._audio_btn.setEnabled(False)
+                self._audio_btn.setToolTip(reason)
+                return
+            self._audio.play(camera.rtsp_url)
+            self._audio_wanted = True
+        self._refresh_audio_icon()
+
+    def _start_audio(self) -> None:
+        """画面通了之后：上次开着声音就继续开，否则保持安静。"""
+        if not self._audio_wanted or self._camera is None:
+            self._refresh_audio_icon()
+            return
+        ok, reason = audio_module.available()
+        if not ok:
+            self._audio_btn.setEnabled(False)
+            self._audio_btn.setToolTip(reason)
+            return
+        self._audio.play(self._camera.rtsp_url)
+        self._refresh_audio_icon()
+
+    def _on_audio_failed(self, message: str) -> None:
+        # 没声音不影响看画面，标在按钮上即可
+        self._audio_btn.setEnabled(False)
+        self._audio_btn.setToolTip(message)
+        self._refresh_audio_icon()
+
     def _build_status(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setContentsMargins(2, 0, 2, 0)
@@ -194,6 +255,9 @@ class CameraPopup(QWidget):
         color = theme().palette.text_2
         for button, name in self._icon_buttons:
             button.setIcon(make_icon(name, color, 14, width=1.4))
+        # 喇叭图标随播放状态变，不能塞进 _icon_buttons（那边是固定图标名）
+        if hasattr(self, "_audio_btn"):
+            self._refresh_audio_icon()
 
     # ==================================================================
     # 数据
@@ -326,6 +390,9 @@ class CameraPopup(QWidget):
     def stop(self) -> None:
         self._token += 1        # 在途的端口探测结果一律作废
         self._probe = None
+        # 先停声音：画面收起来了声音还在响会很怪
+        self._audio.stop()
+        self._refresh_audio_icon()
         grabber = self._grabber
         self._grabber = None
         if grabber is None:
@@ -365,8 +432,11 @@ class CameraPopup(QWidget):
         self._set_status(f"在线 · {self._size_text}", "ok")
         self._fps_from = time.monotonic()
         self._frame_count = 0
+        self._start_audio()
 
     def _on_failed(self, message: str) -> None:
+        self._audio.stop()
+        self._refresh_audio_icon()
         self._view.set_hint(f"{message}\n\n检查后点「重试」")
         self._set_status(message, "error")
         self._show_retry(True)
