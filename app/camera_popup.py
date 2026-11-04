@@ -206,6 +206,11 @@ class CameraPopup(QWidget):
         self._audio.set_volume(value)
         self._refresh_audio_icon()
 
+    def set_audio_volume(self, value: float) -> None:
+        """由设置里的「默认音量」统一调整。"""
+        self._audio.set_volume(value)
+        self._refresh_audio_icon()
+
     def _toggle_audio(self) -> None:
         if self._audio.playing:
             self._audio.stop()

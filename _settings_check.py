@@ -128,6 +128,25 @@ def main() -> int:
 
     dialog.close()
 
+    # ---- 5b. 默认音量滑块 ----
+    volume_dialog = SettingsDialog(
+        "138****0000", [("h1", "我的家")], "all",
+        default_volume=1.5, autostart_enabled=False,
+    )
+    check("默认音量按设置初始化滑块", volume_dialog._volume_slider.value() == 150)
+    check("超过 100% 标出增强", "增强" in volume_dialog._volume_label.text())
+
+    picked: list[float] = []
+    volume_dialog.default_volume_changed.connect(picked.append)
+    volume_dialog._volume_slider.setValue(200)
+    app.processEvents()
+    check("拖动滑块发出音量变化", bool(picked) and abs(picked[-1] - 2.0) < 1e-6)
+    check("滑块旁的数字跟着变", volume_dialog._volume_label.text().startswith("200%"))
+
+    volume_dialog._volume_slider.setValue(5)
+    check("低于下限被夹住", volume_dialog._volume_slider.value() == 30)
+    volume_dialog.close()
+
     # ---- 6. 隐藏启动（--tray）但恢复不出会话时，窗口必须自己出现 ----
     # 否则开机后程序在跑、却停在隐藏的登录页上，用户什么都看不到
     from PySide6.QtTest import QTest
@@ -184,6 +203,18 @@ def main() -> int:
         {"x": 10, "y": 20, "locked": False, "collapsed": False, "edge": None}
     )
     check("上报位置不会把 visible 冲掉", hidden._settings["board"].get("visible") is True)
+
+    # ---- 8. 设置里的默认音量：存设置 + 记进本次运行 + 应用到开着的窗口 ----
+    from app import audio as audio_module
+
+    hidden._set_audio_volume(2.0)
+    check("默认音量写进设置", abs(hidden._settings.get("audio_volume", 0) - 2.0) < 1e-6)
+    check("默认音量记进本次运行", abs(audio_module.shared_volume() - 2.0) < 1e-6)
+
+    hidden._set_audio_volume(99.0)
+    check("传超上限也夹到 MAX_VOLUME",
+          abs(hidden._settings.get("audio_volume", 0) - audio_module.MAX_VOLUME) < 1e-6)
+    hidden._set_audio_volume(1.0)      # 复位，别把用户的运行态留在 3 倍
 
     hidden.close()
 

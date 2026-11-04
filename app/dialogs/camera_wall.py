@@ -255,6 +255,11 @@ class _Tile(QFrame):
         self._audio.set_volume(value)
         self._refresh_audio_icon()
 
+    def set_audio_volume(self, value: float) -> None:
+        """由设置里的「默认音量」统一调整。"""
+        self._audio.set_volume(value)
+        self._refresh_audio_icon()
+
     def _on_audio_failed(self, message: str) -> None:
         # 声音失败不影响画面，标在按钮上就行
         self._audio_btn.setEnabled(False)
@@ -616,6 +621,11 @@ class CameraWall(QDialog):
     # ---- 生命周期 ----
     def selection(self) -> list[str]:
         return list(self._selection)
+
+    def set_audio_volume(self, value: float) -> None:
+        """由设置里的「默认音量」统一调整；每一格都要跟上。"""
+        for tile in self._tiles.values():
+            tile.set_audio_volume(value)
 
     def stop_all(self) -> None:
         self._audio_key = ""

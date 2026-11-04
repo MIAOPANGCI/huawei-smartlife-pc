@@ -296,6 +296,14 @@ def main(argv: list[str] | None = None) -> int:
     # 主线程投递器：所有跨线程回调都经它回到主线程（见 app/dispatch.py）
     dispatch.attach()
 
+    # 设置里的「默认音量」是本次运行的起点；之后在画面里右键还能临时改
+    from . import audio as audio_module
+
+    try:
+        audio_module.remember_volume(float(settings.get("audio_volume", 1.0)))
+    except (TypeError, ValueError):
+        audio_module.remember_volume(1.0)
+
     # 延迟导入：确保 set_theme 先于任何控件构造
     from .controller import AppController
 

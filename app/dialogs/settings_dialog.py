@@ -23,16 +23,22 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
+from .. import audio as audio_module
 from .. import autostart, updater
 from ..theme import ACCENT_PRESETS, theme
 from ..workers import run_async
 from huawei_smartlife.version import VERSION
 
 DIALOG_WIDTH = 780
+
+# 默认音量的下限。不给 0：设成 0 等于"开机就没声音"，用户会以为功能坏了，
+# 真想静音在画面里点一下喇叭更直观。
+MIN_VOLUME_PERCENT = 30
 
 
 class _ColorSwatch(QPushButton):
@@ -70,6 +76,7 @@ class SettingsDialog(QDialog):
     device_advanced_changed = Signal(bool)
     raw_protocol_changed = Signal(bool)
     camera_default_changed = Signal(str)
+    default_volume_changed = Signal(float)
     board_restore_changed = Signal(bool)
     autostart_changed = Signal(bool)
     update_ready = Signal(str)          # 新版本目录，由主窗口接手替换
@@ -86,6 +93,7 @@ class SettingsDialog(QDialog):
         motion_enabled: bool = True,
         cameras: list[tuple[str, str]] | None = None,
         camera_default: str = "",
+        default_volume: float = 1.0,
         board_restore: bool = True,
         autostart_enabled: bool | None = None,
         parent: QWidget | None = None,
@@ -107,6 +115,7 @@ class SettingsDialog(QDialog):
         # (显示名, key)：key 是设备 dev_id，手动接入的那台固定为 "manual"
         self._cameras = cameras or []
         self._camera_default = camera_default
+        self._default_volume = max(0.0, min(audio_module.MAX_VOLUME, float(default_volume)))
         self._board_restore = bool(board_restore)
         # None = 问注册表要真实状态（设置项本身可能存在注册表里、不一定写过 settings）
         self._autostart_enabled = (
@@ -167,6 +176,8 @@ class SettingsDialog(QDialog):
         self._left.addStretch(1)
 
         # ---- 右列：进阶 / 排查 ----
+        self._build_camera(self._right)
+        self._right.addWidget(self._divider())
         self._build_board(self._right)
         self._right.addWidget(self._divider())
         self._build_diagnosis(self._right)
@@ -479,6 +490,55 @@ class SettingsDialog(QDialog):
         logout.setCursor(Qt.PointingHandCursor)
         logout.clicked.connect(self._on_logout)
         layout.addWidget(logout, 0, Qt.AlignLeft)
+
+    # ---- 摄像头 ----
+    def _build_camera(self, layout: QVBoxLayout) -> None:
+        layout.addWidget(self._section("摄像头"))
+
+        max_percent = round(audio_module.MAX_VOLUME * 100)
+        self._volume_label = QLabel()
+        self._volume_label.setObjectName("Body")
+        self._volume_label.setMinimumWidth(48)
+        self._volume_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self._volume_slider = QSlider(Qt.Horizontal)
+        self._volume_slider.setRange(MIN_VOLUME_PERCENT, max_percent)
+        self._volume_slider.setSingleStep(10)
+        self._volume_slider.setPageStep(50)
+        self._volume_slider.setValue(round(self._default_volume * 100))
+        self._volume_slider.setToolTip(
+            "打开摄像头画面时的初始音量；超过 100% 是软件增益"
+        )
+        self._volume_slider.valueChanged.connect(self._on_volume_slider)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        caption = QLabel("默认音量")
+        caption.setObjectName("Body")
+        row.addWidget(caption, 0)
+        row.addWidget(self._volume_slider, 1)
+        row.addWidget(self._volume_label, 0)
+        layout.addLayout(row)
+        self._refresh_volume_label()
+
+        layout.addWidget(
+            self._hint(
+                "摄像头麦克风偏小声，听不清就往右推；超过 100% 是软件增益，再高会失真。"
+                "画面里右键喇叭调的是临时值，重启后仍用这里的设置。"
+            )
+        )
+
+    def _refresh_volume_label(self) -> None:
+        percent = self._volume_slider.value()
+        text = f"{percent}%"
+        if percent > 100:
+            text += " 增强"
+        self._volume_label.setText(text)
+
+    def _on_volume_slider(self, value: int) -> None:
+        self._default_volume = value / 100.0
+        self._refresh_volume_label()
+        self.default_volume_changed.emit(self._default_volume)
 
     # ---- 桌面挂件 ----
     def _build_board(self, layout: QVBoxLayout) -> None:

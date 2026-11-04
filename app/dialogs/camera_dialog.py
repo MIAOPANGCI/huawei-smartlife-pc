@@ -617,6 +617,11 @@ class CameraDialog(QDialog):
         self._audio.set_volume(value)
         self._refresh_audio_icon()
 
+    def set_audio_volume(self, value: float) -> None:
+        """由设置里的「默认音量」统一调整（改设置时就地生效，不用重开窗口）。"""
+        self._audio.set_volume(value)
+        self._refresh_audio_icon()
+
     def _toggle_audio(self) -> None:
         self._audio.set_muted(not self._audio.muted)
         self._refresh_audio_icon()

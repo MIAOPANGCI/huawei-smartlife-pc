@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from .camera_popup import CameraPopup
 from .controller import APP_DIR, UI_SETTINGS_PATH, AppController, friendly_error
 from . import device_spec
+from . import audio as audio_module
 from . import autostart
 from . import updater
 from .dialogs.camera_dialog import CameraDialog
@@ -323,6 +324,21 @@ class MainWindow(QMainWindow):
             "该摄像头",
         )
         self.toast.show_toast(f"相机按钮默认打开：{name}", "info")
+
+    def _set_audio_volume(self, value: float) -> None:
+        """设置里的「默认音量」：下次启动的初始音量，顺便应用到开着的画面。"""
+        value = max(0.0, min(audio_module.MAX_VOLUME, float(value)))
+        self._settings["audio_volume"] = round(value, 3)
+        self._save_settings()
+        # 记成"本次运行的音量"，之后新开的画面窗直接沿用
+        audio_module.remember_volume(value)
+        # 已经开着的窗口也跟上——不然改完设置看不到任何变化，会以为没生效
+        for dialog in self._camera_dialogs.values():
+            dialog.set_audio_volume(value)
+        if self._camera_wall is not None:
+            self._camera_wall.set_audio_volume(value)
+        if self._camera_popup is not None:
+            self._camera_popup.set_audio_volume(value)
 
     def _set_autostart(self, dialog: SettingsDialog, enabled: bool) -> None:
         """开机自启动：写 HKCU 的 Run 键。
@@ -915,6 +931,7 @@ class MainWindow(QMainWindow):
             motion_enabled=bool(self._settings.get("motion", True)),
             cameras=[(item["name"], str(item["key"])) for item in self._camera_targets()],
             camera_default=str(self._settings.get("camera_default") or ""),
+            default_volume=float(self._settings.get("audio_volume", 1.0) or 1.0),
             board_restore=bool(self._settings.get("board_restore", True)),
             parent=self,
         )
@@ -926,6 +943,7 @@ class MainWindow(QMainWindow):
         dialog.device_advanced_changed.connect(self._set_device_advanced)
         dialog.raw_protocol_changed.connect(self._set_raw_protocol)
         dialog.camera_default_changed.connect(self._set_camera_default)
+        dialog.default_volume_changed.connect(self._set_audio_volume)
         dialog.board_restore_changed.connect(self._set_board_restore)
         dialog.update_ready.connect(self._on_update_ready)
         dialog.autostart_changed.connect(
