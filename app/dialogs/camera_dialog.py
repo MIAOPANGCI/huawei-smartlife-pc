@@ -41,6 +41,7 @@ from .. import audio as audio_module
 from ..theme import theme
 from ..widgets import motion
 from ..widgets.glyph_icons import make_icon
+from ..widgets.repaint_guard import RepaintGuard
 from ..workers import run_async
 from huawei_smartlife.camera import (
     CANDIDATE_PATHS,
@@ -385,6 +386,8 @@ class CameraDialog(QDialog):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setMinimumSize(760, 600)
+        # 尺寸骤变后补一次整窗重绘，见 RepaintGuard 里的说明
+        self._repaint_guard = RepaintGuard(self)
         self._build()
         self._apply_config(self._config)
         self._refresh_tip()
@@ -532,6 +535,16 @@ class CameraDialog(QDialog):
             self.showFullScreen()
         else:
             self.showNormal()
+        # 从全屏缩回时窗口只做局部更新，屏幕上会残留全屏那一版画面
+        # （标题栏和表单"没回来"、画面错位），补一次整窗重绘
+        self._repaint_guard.schedule()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 接口
+        super().resizeEvent(event)
+        # 构造过程中 resize 可能早于 guard 建好
+        guard = getattr(self, "_repaint_guard", None)
+        if guard is not None:
+            guard.schedule()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt 接口
         if event.key() == Qt.Key_Escape:

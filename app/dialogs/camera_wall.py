@@ -33,6 +33,7 @@ from huawei_smartlife.camera import RtspCamera
 from .. import audio as audio_module
 from ..theme import theme
 from ..widgets.glyph_icons import make_icon
+from ..widgets.repaint_guard import RepaintGuard
 from .camera_dialog import FrameGrabber, VideoView, have_opencv
 
 MAX_TILES = 9
@@ -282,6 +283,8 @@ class CameraWall(QDialog):
             Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        # 尺寸骤变后补一次整窗重绘，见 RepaintGuard 里的说明
+        self._repaint_guard = RepaintGuard(self)
         self._build()
         self._relayout()
 
@@ -389,6 +392,16 @@ class CameraWall(QDialog):
         else:
             self.showNormal()
         self._sync_chrome()
+        # 从全屏缩回时窗口只做局部更新，屏幕上会残留全屏那一版画面
+        # （标题栏"消失"、格子错位），补一次整窗重绘
+        self._repaint_guard.schedule()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 接口
+        super().resizeEvent(event)
+        # 构造过程中 resize 可能早于 guard 建好
+        guard = getattr(self, "_repaint_guard", None)
+        if guard is not None:
+            guard.schedule()
 
     def _sync_chrome(self) -> None:
         """按窗口**真实**的全屏状态同步周边控件。

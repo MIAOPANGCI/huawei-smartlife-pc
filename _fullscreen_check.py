@@ -13,12 +13,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PySide6.QtCore import QEvent, QObject, Qt, Signal  # noqa: E402
 from PySide6.QtGui import QImage, QKeyEvent  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
+from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 import app.dialogs.camera_wall as wall_module  # noqa: E402
 from app.dialogs.camera_dialog import CameraDialog  # noqa: E402
 from app.dialogs.camera_wall import CameraWall  # noqa: E402
 from app.theme import set_theme  # noqa: E402
+from app.widgets.repaint_guard import RepaintGuard  # noqa: E402
 
 PASSES: list[str] = []
 FAILS: list[str] = []
@@ -169,6 +171,51 @@ def test_wall(app: QApplication) -> None:
     wall.close()
 
 
+class _RepaintSpy(QWidget):
+    """记下 repaint 被真正调用了几次。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def repaint(self) -> None:  # noqa: N802 - Qt 接口
+        self.calls += 1
+
+
+def test_repaint_guard(app: QApplication) -> None:
+    """退出全屏后要补一次整窗重绘。
+
+    这窗口是半透明 + 阴影特效，从全屏缩回时 Qt 只重画变化的局部区域，屏幕上
+    留着全屏那一版（标题栏像"消失"、格子错位），而各项 geometry 全是对的。
+    只有真在屏幕上抓图才看得见，offscreen 抓不到——所以这里退一步验证机制：
+    确实安排了重绘、到点真的画、连续 resize 会合并。
+    """
+    spy = _RepaintSpy()
+    guard = RepaintGuard(spy, delay_ms=30)
+    guard.schedule()
+    check("schedule 后定时器在跑", guard._timer.isActive())
+    QTest.qWait(150)
+    check("到点真的调用 repaint", spy.calls == 1)
+
+    spy.calls = 0
+    guard.schedule()
+    guard.schedule()
+    guard.schedule()
+    QTest.qWait(150)
+    check("连续 schedule 合并成一次", spy.calls == 1)
+
+    # 两个画面窗都挂了兜底，且退出全屏会真的安排重绘
+    dialog = CameraDialog(None, {"host": "192.0.2.11"}, manual_name="门口", manual_key="p")
+    check("单台画面窗挂了重绘兜底", isinstance(getattr(dialog, "_repaint_guard", None), RepaintGuard))
+    dialog._repaint_guard._timer.stop()
+    dialog._toggle_fullscreen()
+    QTest.qWait(50)
+    dialog._toggle_fullscreen()
+    QTest.qWait(20)
+    check("单台画面窗退出全屏会安排重绘", dialog._repaint_guard._timer.isActive())
+    dialog.close()
+
+
 def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion")
@@ -176,6 +223,7 @@ def main() -> int:
 
     test_single_dialog(app)
     test_wall(app)
+    test_repaint_guard(app)
 
     print()
     print(f"通过 {len(PASSES)} / {len(PASSES) + len(FAILS)}")

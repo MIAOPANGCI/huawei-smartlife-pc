@@ -311,7 +311,7 @@ HUAWEI-SMARTLIFE-PC/
 ├── _edge_check.py             # 挂件贴边隐藏专项自检（吸附 / 缩进 / 滑出 / 落盘坐标）
 ├── _camera_popup_check.py     # 挂件快捷看画面专项自检（入口显隐 / 排序 / 定位 / 释放 / ESC）
 ├── _camera_wall_check.py      # 多路同屏自检（格数排布 / 增删 / 失效选择 / 线程释放）
-├── _fullscreen_check.py       # 全屏自检（单台与同屏的进出、周边控件藏与恢复）
+├── _fullscreen_check.py       # 全屏自检（进出、控件恢复、缩回后的整窗重绘）
 ├── _audio_check.py            # 音频自检（依赖 / 静音与音量状态 / 多路互斥）
 ├── _settings_check.py         # 设置界面与开机自启动专项自检（两列 / 注册表失败回滚）
 ├── _launcher_check.py         # 开机启动器自检（隔离目录验证参数转发与工作目录）
@@ -346,6 +346,7 @@ HUAWEI-SMARTLIFE-PC/
     ├── camera_popup.py        # 挂件旁的实时画面浮层（复用 camera_dialog 的读帧与绘制）
     ├── dialogs/camera_wall.py # 多路同屏：N 格网格，每格一套读帧 + 绘制
     ├── audio.py               # 摄像头声音（PyAV 解音轨 + sounddevice 播放）
+    ├── widgets/repaint_guard.py # 半透明窗口缩回后的整窗重绘（全屏 bug 的兜底）
     ├── autostart.py           # 开机自启动（「启动」文件夹快捷方式，带 --tray 静默启动）
     ├── updater.py             # 检查更新与一键更新（git pull / 下载替换）
     ├── state.py               # 设备状态存储与合并（纯 Python）
@@ -398,7 +399,7 @@ python _smoke_test.py     # 无需显示环境、不联网
 失败时的勾选回滚、隐藏启动没有会话时自动显示窗口（`_settings_check.py` 34 项）、
 启动器参数转发与工作目录（`_launcher_check.py`，需先打包）、
 多路同屏的格数排布与线程释放（`_camera_wall_check.py` 22 项）、
-全屏的进出与控件恢复（`_fullscreen_check.py` 27 项）、
+全屏的进出、控件恢复与缩回后的整窗重绘（`_fullscreen_check.py` 44 项）、
 音频的静音与多路互斥（`_audio_check.py` 18 项）、
 全项目 Qt 属性引用是否存在（`_api_check.py`）、
 自选顺序与失效回退、  
