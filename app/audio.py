@@ -22,6 +22,15 @@ from PySide6.QtCore import QObject, QThread, Signal
 SAMPLE_RATE = 48000
 CHANNELS = 2
 
+PREROLL_SECONDS = 0.25
+"""起播前先攒这么多音频再放。用来吸收网络抖动（实测帧是成批到的）。"""
+
+MAX_BUFFER_SECONDS = 0.60
+"""积压上限。超过就丢最旧的，避免延迟越累积越大。
+
+实测这路流的最大抖动是 215ms，0.6 秒有三倍余量；再大就只是白白加延迟
+（1.5 秒时声音比画面晚一秒半，听着很别扭）。"""
+
 # 软件增益上限。摄像头麦克风普遍偏小，G.711 又是窄带语音，实测本机两台在
 # 100% 下都偏轻，150%–200% 比较合适。再往上人声开始削顶发闷，所以封在 3 倍。
 MAX_VOLUME = 3.0
@@ -59,8 +68,26 @@ def available() -> tuple[bool, str]:
     return True, ""
 
 
+def _scale(data: bytes, volume: float) -> bytes:
+    """按音量缩放 16bit 采样；没有 numpy 就原样返回。"""
+    try:
+        import numpy as np
+    except ImportError:
+        return data
+    samples = np.frombuffer(data, dtype=np.int16).astype(np.int32)
+    return (samples * volume).clip(-32768, 32767).astype(np.int16).tobytes()
+
+
 class _AudioWorker(QThread):
-    """解码 + 播放循环。stop 是协作式的：每帧检查一次标志。"""
+    """解码线程 + 声卡回调。
+
+    播放不是"解一块写一块"。实测这两路音频的帧是**成批到达**的：中位间隔 0ms，
+    P99 到 130ms，最大 215ms——网络包是一阵一阵来的。原来直接 write() 给声卡，
+    两批之间就是一段空白，听感就是一顿一顿（断音）。
+
+    现在解码只负责往缓冲区塞，由声卡回调按时来取，取不到就补静音；再加 300ms
+    预缓冲把网络抖动吸收掉。代价是声音比画面又晚了 0.3 秒，监控场景可以接受。
+    """
 
     failed = Signal(str)
     ready = Signal(int)          # 实际使用的采样率
@@ -70,6 +97,33 @@ class _AudioWorker(QThread):
         self._url = url
         self._state = state      # {"stop": bool, "volume": float}
         self._container = None
+        self._buffer = bytearray()
+        self._lock = threading.Lock()
+        self._preroll = int(SAMPLE_RATE * PREROLL_SECONDS) * CHANNELS * 2
+        self._prerolled = False
+
+    # ---- 声卡回调（在 PortAudio 的线程里，不能抛异常）----
+    def _callback(self, outdata, frames, time_info, status) -> None:
+        need = frames * CHANNELS * 2
+        data = b""
+        with self._lock:
+            buffer = self._buffer
+            if len(buffer) >= self._preroll:
+                self._prerolled = True
+            if self._prerolled and len(buffer) >= need:
+                data = bytes(buffer[:need])
+                del buffer[:need]
+            elif self._prerolled:
+                # 供给断了一下：补静音。宁可短暂无声，也别重播上一块——那是爆音
+                data = bytes(buffer) + b"\x00" * (need - len(buffer))
+                buffer.clear()
+        if not data:
+            # 还在攒预缓冲，先出静音
+            data = b"\x00" * need
+        volume = float(self._state.get("volume", 1.0))
+        if abs(volume - 1.0) > 0.001:
+            data = _scale(data, volume)
+        outdata[:] = data
 
     def run(self) -> None:  # noqa: D401 - QThread 接口
         try:
@@ -104,12 +158,15 @@ class _AudioWorker(QThread):
                     samplerate=SAMPLE_RATE,
                     channels=CHANNELS,
                     dtype="int16",
-                    blocksize=1024,
+                    blocksize=0,        # 让 PortAudio 按设备自己挑
+                    latency="high",     # 缓冲给厚一点，抗网络抖动
+                    callback=self._callback,
                 )
             except Exception as error:  # noqa: BLE001 - 设备被占用
                 self.failed.emit(f"打不开音频设备：{error}")
                 return
 
+            cap = int(SAMPLE_RATE * MAX_BUFFER_SECONDS) * CHANNELS * 2
             with output:
                 self.ready.emit(SAMPLE_RATE)
                 while not self._state["stop"]:
@@ -119,7 +176,16 @@ class _AudioWorker(QThread):
                         if self._state["stop"]:
                             break
                         for chunk in resampler.resample(frame):
-                            self._write(output, bytes(chunk.planes[0]))
+                            data = bytes(chunk.planes[0])
+                            if not data:
+                                continue
+                            with self._lock:
+                                self._buffer.extend(data)
+                                overflow = len(self._buffer) - cap
+                                if overflow > 0:
+                                    # 积压太多说明网络远远跟不上。丢掉最旧的，
+                                    # 否则延迟一路累积，声音会越来越晚
+                                    del self._buffer[:overflow]
                     if not decoded:
                         raise RuntimeError("音频流已结束")
         except Exception as error:  # noqa: BLE001 - 断流等
@@ -132,24 +198,6 @@ class _AudioWorker(QThread):
                 except Exception:  # noqa: BLE001
                     pass
                 self._container = None
-
-    def _write(self, stream, data: bytes) -> None:
-        volume = float(self._state.get("volume", 1.0))
-        if volume <= 0.001:
-            # 静音也要照常写入（零数据），否则流会积压、恢复时一下涌出来
-            stream.write(b"\x00" * len(data))
-            return
-        if abs(volume - 1.0) > 0.001:
-            # 大于 1 就是增益：摄像头麦克风本来就轻，只靠系统音量常常推不上去
-            try:
-                import numpy as np
-
-                samples = np.frombuffer(data, dtype=np.int16).astype(np.int32)
-                samples = (samples * volume).clip(-32768, 32767).astype(np.int16)
-                data = samples.tobytes()
-            except Exception:  # noqa: BLE001 - 没有 numpy 就按原音量播
-                pass
-        stream.write(data)
 
     def request_stop(self) -> None:
         self._state["stop"] = True

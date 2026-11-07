@@ -130,11 +130,11 @@ def test_boost() -> None:
     audio_module.CameraAudio().set_volume(1.0)      # 复位，别影响后面的用例
 
     # 增益真的作用到采样上：一半幅度 ×2 应当翻倍，超出 16bit 的削到边界
-    audio.set_volume(2.0)
     samples = np.array([100, -200, 30000, -32000], dtype=np.int16)
-    scaled = (np.frombuffer(samples.tobytes(), dtype=np.int16).astype(np.int32) * 2.0
-              ).clip(-32768, 32767).astype(np.int16)
-    check("增益按倍数放大采样并削顶", list(scaled) == [200, -400, 32767, -32768])
+    scaled = audio_module._scale(samples.tobytes(), 2.0)
+    got = list(np.frombuffer(scaled, dtype=np.int16))
+    check("增益按倍数放大采样并削顶", got == [200, -400, 32767, -32768])
+    check("音量 1.0 时原样返回", audio_module._scale(samples.tobytes(), 1.0) == samples.tobytes())
 
     # 静音不该把记住的音量改掉
     audio.set_muted(True)
@@ -154,6 +154,45 @@ def test_volume_menu() -> None:
     check("菜单档位递增", values == sorted(values))
     check("100% 不标增强", "增强" not in volume_label(1.0))
     check("150% 标出增强", "增强" in volume_label(1.5))
+
+
+def test_jitter_buffer() -> None:
+    """回调式播放的缓冲：攒不够就补静音，断档绝不重播旧数据（那是爆音）。
+
+    实测这路音频是成批到达的（P99 间隔 130ms、最大 215ms），直接往声卡灌就会
+    一顿一顿。所以改成声卡回调取数据 + 预缓冲，这几个边界必须对。
+    """
+    worker = audio_module._AudioWorker("rtsp://x", {"stop": False, "volume": 1.0})
+    frames = 256
+    need = frames * audio_module.CHANNELS * 2
+
+    # 1. 预缓冲没攒够：给静音，而且不能消耗缓冲（否则永远攒不够）
+    half = worker._preroll // 2
+    worker._buffer.extend(b"\x01" * half)
+    out = bytearray(need)
+    worker._callback(out, frames, None, None)
+    check("预缓冲不足时输出静音", set(out) == {0})
+    check("预缓冲不足时不动缓冲", len(worker._buffer) == half)
+
+    # 2. 攒够了就正常出数据（清掉上一步的 0x01，只留 0x02 便于判断）
+    worker._buffer.clear()
+    worker._buffer.extend(b"\x02" * worker._preroll)
+    worker._callback(out, frames, None, None)
+    check("攒够预缓冲后输出真实数据", bytes(out) == b"\x02" * need)
+    check("只取走本次需要的量", len(worker._buffer) == worker._preroll - need)
+
+    # 3. 供给断档：前半段给数据、后半段补静音，不能重播上一块
+    worker._buffer.clear()
+    worker._buffer.extend(b"\x03" * (need // 2))
+    worker._callback(out, frames, None, None)
+    check("断档时前半段照常播", bytes(out[:need // 2]) == b"\x03" * (need // 2))
+    check("断档时后半段补静音", set(out[need // 2:]) == {0})
+    check("断档后缓冲清空", len(worker._buffer) == 0)
+
+    # 4. 延迟有上限：积压超过 MAX_BUFFER_SECONDS 就丢最旧的
+    check("积压上限在 1 秒以内（延迟不能太大）", audio_module.MAX_BUFFER_SECONDS <= 1.0)
+    check("预缓冲小于积压上限", audio_module.PREROLL_SECONDS < audio_module.MAX_BUFFER_SECONDS)
+    check("积压上限扛得住实测最大抖动 215ms", audio_module.MAX_BUFFER_SECONDS > 0.215 * 2)
 
 
 def test_wall_exclusive(app: QApplication) -> None:
@@ -204,6 +243,7 @@ def main() -> int:
     test_state()
     test_boost()
     test_volume_menu()
+    test_jitter_buffer()
     test_wall_exclusive(app)
 
     print()
