@@ -868,15 +868,25 @@ class CameraDialog(QDialog):
         self._start_audio()
 
     def _start_audio(self) -> None:
-        """画面通了再开声音：先有画面确认地址对，音频再连一次才有意义。"""
-        if self._camera is None or not self._audio_btn.isVisibleTo(self):
-            return
-        ok, reason = audio_module.available()
-        if not ok:
+        """画面通了再开声音：先有画面确认地址对，音频再连一次才有意义。
+
+        整段兜住异常。这是从 ``_on_opened``（信号槽）里调的，槽里抛出去会被
+        全局异常钩子接住弹「程序出错」模态框——框还常常压在画面窗后面，
+        用户只看到界面点不动。声音是附加功能，出问题最多没声音，不能把画面废掉。
+        """
+        try:
+            camera = self._current_camera()
+            if camera is None or not self._audio_btn.isVisibleTo(self):
+                return
+            ok, reason = audio_module.available()
+            if not ok:
+                self._audio_btn.setEnabled(False)
+                self._audio_btn.setToolTip(reason)
+                return
+            self._audio.play(camera.rtsp_url)
+        except Exception as error:  # noqa: BLE001 - 声音坏了不影响看画面
             self._audio_btn.setEnabled(False)
-            self._audio_btn.setToolTip(reason)
-            return
-        self._audio.play(self._camera.rtsp_url)
+            self._audio_btn.setToolTip(f"声音启动失败：{error}")
 
     def _on_audio_failed(self, message: str) -> None:
         # 声音出问题不影响画面，标在按钮上别打断正在看的人

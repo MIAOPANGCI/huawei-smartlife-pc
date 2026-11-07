@@ -156,6 +156,41 @@ def test_volume_menu() -> None:
     check("150% 标出增强", "增强" in volume_label(1.5))
 
 
+def test_dialog_starts_audio(app: QApplication) -> None:
+    """单台画面窗连上后要真的把音频开起来，而且不能抛异常。
+
+    这条路径上曾经挂了 `self._camera` 的笔误：opened 信号一触发就
+    AttributeError，被全局异常钩子弹成模态「程序出错」框——框还常压在画面窗
+    后面，用户看到的就是"连上以后界面点不动"。所以既要测不抛，也要测真开了。
+    """
+    import app.dialogs.camera_dialog as cd
+
+    original_audio = cd.audio_module.CameraAudio
+    original_available = cd.audio_module.available
+    cd.audio_module.CameraAudio = FakeAudio
+    cd.audio_module.available = lambda: (True, "")
+    try:
+        dialog = cd.CameraDialog(
+            None, {"host": "192.0.2.11", "username": "u", "password": "p"},
+            None, manual_name="测试", manual_key="t",
+        )
+        dialog.show()
+        app.processEvents()
+
+        errors: list[Exception] = []
+        try:
+            dialog._on_opened(1920, 1080)      # 模拟首帧到达
+        except Exception as error:  # noqa: BLE001 - 就是要捕获它
+            errors.append(error)
+        check("连上画面后 _on_opened 不抛异常", not errors)
+        check("连上画面后自动开了声音", bool(dialog._audio.urls))
+        dialog._audio.stop()
+        dialog.close()
+    finally:
+        cd.audio_module.CameraAudio = original_audio
+        cd.audio_module.available = original_available
+
+
 def test_jitter_buffer() -> None:
     """回调式播放的缓冲：攒不够就补静音，断档绝不重播旧数据（那是爆音）。
 
@@ -244,6 +279,7 @@ def main() -> int:
     test_boost()
     test_volume_menu()
     test_jitter_buffer()
+    test_dialog_starts_audio(app)
     test_wall_exclusive(app)
 
     print()
