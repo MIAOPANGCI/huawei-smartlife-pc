@@ -575,7 +575,7 @@ class SettingsDialog(QDialog):
             self._tile_align,
         )
         self._tile_align_combo.setToolTip(
-            "网格对齐：松手时坐标吸到 16 像素的整数倍，几块之间能排整齐\n"
+            "网格对齐：松手时按磁贴大小吸附成整齐的格子（块与块之间留固定间隙）\n"
             "贴边吸附：靠近屏幕边缘时自动贴上去"
         )
         self._tile_align_combo.currentIndexChanged.connect(self._on_tile_align)

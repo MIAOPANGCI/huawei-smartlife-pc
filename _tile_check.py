@@ -12,11 +12,13 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PySide6.QtCore import QPoint  # noqa: E402
+from PySide6.QtCore import QPoint, Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app.theme import set_theme  # noqa: E402
 from app.widget_tile import (  # noqa: E402
+    TILE_GAP,
     TILE_HEIGHT,
     TILE_SIZES,
     TILE_WIDTH,
@@ -279,6 +281,36 @@ def test_integration(app: QApplication) -> None:
     window.close()
 
 
+def test_window_behaviour(app: QApplication) -> None:
+    """磁贴是"桌面上的方块"：不置顶、不进任务栏，但内容区不能吞掉子控件的点击。"""
+    board = TileBoard()
+    board.set_devices([make_device("a", "热水器", on=True)])
+    tile = board._tiles["a"]
+    flags = tile.windowFlags()
+    check("磁贴不置顶（不该压住别的窗口）", not (flags & Qt.WindowStaysOnTopHint))
+    check("磁贴是 Tool 窗口（不进任务栏 / Alt-Tab）", bool(flags & Qt.Tool))
+    check("磁贴无边框", bool(flags & Qt.FramelessWindowHint))
+
+    tile.show()
+    app.processEvents()
+    center = tile._power.mapTo(tile, tile._power.rect().center())
+    check("电源键能被鼠标命中", tile.childAt(center) is tile._power)
+
+    fired: list[str] = []
+    tile.power_requested.connect(fired.append)
+    QTest.mouseClick(tile._power, Qt.LeftButton)
+    app.processEvents()
+    check("点电源键会发出开关请求", fired == ["a"])
+
+    # 这一条是回归防护：内容区一旦设了 WA_TransparentForMouseEvents，
+    # 子控件（电源键）会跟着收不到鼠标事件，表现就是"开关点不了"
+    check(
+        "内容区没有禁用鼠标事件",
+        not tile._body.testAttribute(Qt.WA_TransparentForMouseEvents),
+    )
+    board.close_all()
+
+
 def test_sizes(app: QApplication) -> None:
     """三档尺寸都要真的换了尺寸，紧凑档还要自动省掉状态文字。"""
     for key, (width, height, _icon, _power, shows_summary) in TILE_SIZES.items():
@@ -322,14 +354,19 @@ def test_snap(app: QApplication) -> None:
     board.set_devices([make_device("a", "A", on=True)])
     tile = board._tiles["a"]
 
-    tile.move(203, 117)
+    area = _screen_area()
+    step_x = tile.width() + TILE_GAP
+    step_y = tile.height() + TILE_GAP
+    tile.move(area.left() + 203, area.top() + 117)
     tile._remember_pos()
-    check("网格对齐吸到 16 的倍数", (tile.x() % 16, tile.y() % 16) == (0, 0))
-    check("吸附后仍在原处附近", abs(tile.x() - 203) <= 8 and abs(tile.y() - 117) <= 8)
+    check(
+        "网格对齐落在网格线上",
+        ((tile.x() - area.left()) % step_x, (tile.y() - area.top()) % step_y) == (0, 0),
+    )
+    check("吸附后仍在原处附近", abs(tile.x() - area.left() - 203) <= step_x // 2)
 
     board.set_options(align="edge")
     tile = board._tiles["a"]
-    area = _screen_area()
     tile.move(area.left() + 5, area.top() + 7)
     tile._remember_pos()
     check("贴边吸附到左上角", (tile.x(), tile.y()) == (area.left(), area.top()))
@@ -395,6 +432,7 @@ def main() -> int:
     test_position(app)
     test_drag(app)
     test_signals(app)
+    test_window_behaviour(app)
     test_sizes(app)
     test_set_options(app)
     test_snap(app)

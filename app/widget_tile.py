@@ -45,8 +45,6 @@ TILE_HEIGHT = TILE_SIZES[DEFAULT_SIZE][1]
 TILE_GAP = 12
 # 自动排布时离屏幕边缘留的余量（避开任务栏和屏幕边）
 EDGE_MARGIN = 40
-# 网格吸附的步长；拖动松手时把坐标对齐到它的整数倍
-GRID_STEP = 16
 # 距离屏幕边缘多近算"要贴上去"
 SNAP_DISTANCE = 24
 
@@ -87,13 +85,13 @@ class DeviceTile(QWidget):
         show_summary: bool = True,
         align: str = "free",
     ) -> None:
-        # parent 传 None：挂到主窗口下的话，主窗口最小化会把磁贴一起藏起来
+        # parent 传 None：挂到主窗口下的话，主窗口最小化会把磁贴一起藏起来。
+        #
+        # 不要 WindowStaysOnTopHint：磁贴是"桌面上的小方块"，不该永远压在别的
+        # 窗口上面。用 Qt.Tool 是为了不进任务栏、不进 Alt-Tab。
         super().__init__(
             None,
-            Qt.Tool
-            | Qt.FramelessWindowHint
-            | Qt.WindowStaysOnTopHint
-            | Qt.NoDropShadowWindowHint,
+            Qt.Tool | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint,
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         width, height, icon, power, size_shows_summary = size_spec(size_key)
@@ -119,9 +117,9 @@ class DeviceTile(QWidget):
 
         self._body = QFrame()
         self._body.setObjectName("DesktopTile")
-        # 不接收鼠标，事件直接落到 DeviceTile 上（拖动才不会中途丢掉）；
-        # 电源键是它的子控件，仍然自己收点击
-        self._body.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        # 注意：这里**不能**设 WA_TransparentForMouseEvents。那个属性会连子控件
+        # 一起禁用鼠标事件，电源键就点不动了（踩过）。不设也没事：QFrame 默认
+        # 忽略鼠标按下事件，会自然冒泡到 DeviceTile 上开始拖动。
         shell.addWidget(self._body)
 
         box = QVBoxLayout(self._body)
@@ -198,7 +196,6 @@ class DeviceTile(QWidget):
         y = max(area.top(), min(target.y(), area.bottom() - self.height()))
         self.move(x, y)
         self.show()
-        self.raise_()
 
     def apply_align(self, align: str) -> None:
         """改对齐方式（不用重建窗口）。"""
@@ -211,10 +208,15 @@ class DeviceTile(QWidget):
     def _snapped(self, pos: QPoint) -> QPoint:
         """按当前对齐方式算最终落点。"""
         if self._align == "grid":
-            return QPoint(
-                round(pos.x() / GRID_STEP) * GRID_STEP,
-                round(pos.y() / GRID_STEP) * GRID_STEP,
-            )
+            # 按"磁贴尺寸 + 间距"步进，而不是死磕 16 像素。
+            # 16px 只保证坐标是整数倍，可是磁贴宽高都不是 16 的倍数，两块挨在一起
+            # 时反而会贴死（中间没有缝），看起来像粘成了一片。
+            area = _screen_area()
+            step_x = self.width() + TILE_GAP
+            step_y = self.height() + TILE_GAP
+            col = max(0, round((pos.x() - area.left()) / step_x))
+            row = max(0, round((pos.y() - area.top()) / step_y))
+            return QPoint(area.left() + col * step_x, area.top() + row * step_y)
         if self._align != "edge":
             return pos
 
