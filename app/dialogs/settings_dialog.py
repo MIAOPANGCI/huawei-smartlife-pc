@@ -106,7 +106,7 @@ class SettingsDialog(QDialog):
         tile_show_summary: bool = True,
         tile_glow: str = "balanced",
         tile_wallpaper: bool = True,
-        tile_opacity: int = 86,
+        tile_opacity: int = 55,
         font_family: str = "",
         board_restore: bool = True,
         autostart_enabled: bool | None = None,
@@ -135,7 +135,7 @@ class SettingsDialog(QDialog):
         self._tile_show_summary = bool(tile_show_summary)
         self._tile_glow = tile_glow
         self._tile_wallpaper = bool(tile_wallpaper)
-        self._tile_opacity = max(45, min(100, int(tile_opacity)))
+        self._tile_opacity = max(20, min(100, int(tile_opacity)))
         self._font_family = str(font_family or "")
         self._board_restore = bool(board_restore)
         # None = 问注册表要真实状态（设置项本身可能存在注册表里、不一定写过 settings）
@@ -668,9 +668,12 @@ class SettingsDialog(QDialog):
         opacity_label.setObjectName("Body")
         opacity_row.addWidget(opacity_label)
         self._tile_opacity_slider = QSlider(Qt.Horizontal)
-        self._tile_opacity_slider.setRange(45, 100)
+        self._tile_opacity_slider.setRange(20, 100)
         self._tile_opacity_slider.setValue(self._tile_opacity)
         self._tile_opacity_slider.setMinimumWidth(120)
+        self._tile_opacity_slider.setToolTip(
+            "卡片底色有多不透明。壁纸层下这个值直接决定透出多少壁纸；20% 时几乎是玻璃"
+        )
         opacity_row.addWidget(self._tile_opacity_slider, 1)
         self._tile_opacity_label = QLabel(f"{self._tile_opacity}%")
         self._tile_opacity_label.setObjectName("Body")

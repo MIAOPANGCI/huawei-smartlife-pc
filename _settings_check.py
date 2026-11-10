@@ -177,8 +177,8 @@ def main() -> int:
     app.processEvents()
     check("壁纸层开关发出信号", wallpaper_picks == [True])
 
-    check("不透明度按设置初始化", tile_dialog._tile_opacity_slider.value() == 86)
-    check("不透明度标签跟着显示", tile_dialog._tile_opacity_label.text() == "86%")
+    check("不透明度按设置初始化", tile_dialog._tile_opacity_slider.value() == 55)
+    check("不透明度标签跟着显示", tile_dialog._tile_opacity_label.text() == "55%")
     opacity_picks: list[int] = []
     tile_dialog.tile_opacity_changed.connect(opacity_picks.append)
     tile_dialog._tile_opacity_slider.setValue(60)

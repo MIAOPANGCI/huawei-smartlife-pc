@@ -52,9 +52,9 @@ from .widgets.labels import ElidedLabel
 # 尺寸档位：(宽, 高, 图标尺寸, 电源键直径, 是否显示状态文字)
 # 这里的宽高是**窗口**尺寸，卡片本身比它四周各小 GLOW_PAD（留给光晕外溢）。
 TILE_SIZES: dict[str, tuple[int, int, int, int, bool]] = {
-    "compact": (164, 128, 26, 30, False),
-    "standard": (204, 156, 32, 34, True),
-    "large": (244, 180, 36, 38, True),
+    "compact": (164, 112, 24, 26, False),
+    "standard": (212, 136, 32, 34, True),
+    "large": (248, 156, 36, 38, True),
     "card": (364, 232, 40, 48, True),
 }
 DEFAULT_SIZE = "standard"
@@ -76,8 +76,8 @@ DEFAULT_GLOW = "balanced"
 GLOW_MODES = tuple(GLOW_LEVELS)
 
 # 卡片底色不透明度（0~1）。壁纸层下这个值直接决定"透出多少壁纸"
-DEFAULT_OPACITY = 0.86
-MIN_OPACITY = 0.45
+DEFAULT_OPACITY = 0.55
+MIN_OPACITY = 0.20
 
 # 标准档的尺寸，保留这两个名字给自检和默认位置计算用
 TILE_WIDTH = TILE_SIZES[DEFAULT_SIZE][0]
@@ -351,7 +351,7 @@ class DeviceTile(QWidget):
         box.setSpacing(2)
 
         top = QHBoxLayout()
-        top.setSpacing(8)
+        top.setSpacing(6)
         self._glyph = DeviceGlyph("generic", self._icon_size, True)
         self._glyph.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         top.addWidget(self._glyph, 0, Qt.AlignTop if not self.is_card else Qt.AlignVCenter)
@@ -377,6 +377,9 @@ class DeviceTile(QWidget):
         )
         top.addWidget(self._power, 0, Qt.AlignTop if not self.is_card else Qt.AlignVCenter)
         box.addLayout(top)
+
+        if not self.is_card:
+            box.insertStretch(0, 1)
 
         self._stepper: _Stepper | None = None
         self._chips: _ChipRow | None = None
@@ -547,39 +550,45 @@ class DeviceTile(QWidget):
         ]
 
     def _paint_halo(self, painter: QPainter, card: QRectF) -> None:
-        """卡片外面那一圈光。
+        """卡片外面那一圈柔光。
 
-        用"一圈圈放大的圆角矩形"叠出来，而不是径向渐变：窗口只比卡片大
-        GLOW_PAD，径向渐变还没衰减到 0 就被窗口裁掉，会留下一条方形硬边；
-        一圈圈画的话最外圈的圆角正好贴着窗口四角，收尾是圆的。
+        做法是"一圈圈放大的圆角矩形"，但每一圈的浓度**不是各自独立给的**——
+        后画的圈会盖住先画的圈，独立给值等于把透明度一层层累加，实测会叠成
+        一圈刺眼的荧光描边。这里按目标曲线反推每一圈该补多少：
+
+            a_i = (t_i - t_prev) / (1 - t_prev)
+
+        这样叠完的最终浓度正好等于目标曲线：最外圈 0，贴到卡片边缘才到峰值。
         """
         if self.glow_strength <= 0:
             return
         pal = theme().palette
-        warm = QColor(mix(pal.accent, "#ff8a5c", 0.30))
-        cool = QColor(mix(pal.accent, "#4fd1ff", 0.55))
-        violet = QColor(mix(pal.accent, "#b28cff", 0.55))
+        dark = pal.mode == "dark"
+        # 和卡片底色揉一下，但别揉太灰，否则在深色壁纸上基本看不见
+        warm = QColor(mix(mix(pal.accent, pal.surface, 0.25), "#ff9a7a", 0.30))
+        cool = QColor(mix(mix(pal.accent, pal.surface, 0.35), "#63c8ff", 0.35))
 
+        peak = (0.42 if dark else 0.48) * self.glow_strength
         steps = GLOW_PAD
+        achieved = 0.0
         for step in range(steps, 0, -1):
             ratio = step / steps                     # 1 = 最外圈
-            # 1.9 次方让最外圈几乎完全透明：颜色再艳，只要边缘那一两像素的
-            # 浓度够低，就看不出"一圈矩形"，只会觉得是光散出去了
-            falloff = (1.0 - ratio) ** 1.9
-            base = 115 if theme().palette.mode == "light" else 78
-            alpha = int(round(base * falloff * self.glow_strength))
-            if alpha <= 1:
+            target = peak * (1.0 - ratio) ** 2.0
+            if target <= achieved + 1e-4:
                 continue
+            alpha = (target - achieved) / max(1e-3, 1.0 - achieved)
+            achieved = target
+
             path = QPainterPath()
             path.addRoundedRect(
                 card.adjusted(-step, -step, step, step),
                 CARD_RADIUS + step,
                 CARD_RADIUS + step,
             )
-            gradient = QLinearGradient(card.topLeft(), card.bottomRight())
-            for stop, color in ((0.0, warm), (0.5, cool), (1.0, violet)):
+            gradient = QLinearGradient(card.topLeft(), card.bottomLeft())
+            for stop, color in ((0.0, warm), (1.0, cool)):
                 tint = QColor(color)
-                tint.setAlpha(alpha)
+                tint.setAlphaF(min(1.0, alpha))
                 gradient.setColorAt(stop, tint)
             painter.fillPath(path, gradient)
 
@@ -588,7 +597,7 @@ class DeviceTile(QWidget):
         if self.glow_strength <= 0:
             return
         # 深色底上光更"抢眼"，同样是 0.4 的浓度会糊掉整张卡，所以按主题打折
-        weight = 0.55 if theme().palette.mode == "light" else 0.32
+        weight = 0.30 if theme().palette.mode == "light" else 0.18
         for center, radius, color, alpha in self._glow_blobs(card):
             peak = max(0.0, min(1.0, alpha * self.glow_strength * weight))
             gradient = QRadialGradient(center, radius)
