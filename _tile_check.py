@@ -370,26 +370,37 @@ def test_glow(app: QApplication) -> None:
 
 
 def test_wallpaper(app: QApplication) -> None:
-    """壁纸层：挂不上要退化成普通窗口，不能变成一个看不见的窗口。"""
+    """壁纸层：挂得上就用分层窗口推图，挂不上/推不上都要能退回普通窗口。"""
     from PySide6.QtCore import Qt as _Qt
 
     import app.widget_tile as tile_module
 
-    original = tile_module.wallpaper.attach
-    attempts: list[int] = []
+    module = tile_module.wallpaper
+    original = (module.attach, module.make_layered, module.push_layered)
+    calls: dict[str, int] = {"attach": 0, "push": 0}
+    pushed: list[tuple[int, int]] = []
 
-    def fake_fail(hwnd: int):
-        attempts.append(hwnd)
+    def attach_fail(hwnd):
+        calls["attach"] += 1
         return None
 
-    def fake_ok(hwnd: int):
-        attempts.append(hwnd)
+    def attach_ok(hwnd):
+        calls["attach"] += 1
         return (0, 0)
 
+    def make_ok(hwnd):
+        return True
+
+    def push_ok(hwnd, image, x, y):
+        calls["push"] += 1
+        pushed.append((image.width(), image.height()))
+        return True
+
     try:
-        tile_module.wallpaper.attach = fake_fail
+        # 1. 挂不上 → 老实当普通窗口，并且不再反复重试
+        module.attach, module.make_layered, module.push_layered = attach_fail, make_ok, push_ok
         tile = DeviceTile(make_device("a", "A", on=True), wallpaper_mode=True)
-        check("壁纸模式不开半透明（子窗口不支持分层）",
+        check("壁纸模式不开半透明（Qt 的分层在这条路上不渲染）",
               tile.testAttribute(_Qt.WA_TranslucentBackground) is False)
         tile.show_at(QPoint(300, 300))
         app.processEvents()
@@ -397,23 +408,91 @@ def test_wallpaper(app: QApplication) -> None:
         check("挂不上后关掉重试（不反复折腾自己）", tile._wallpaper_wanted is False)
         tile.hide()
 
-        tile_module.wallpaper.attach = fake_ok
-        ok_tile = DeviceTile(make_device("b", "B", on=True), wallpaper_mode=True)
+        # 2. 挂上 + 分层成功 → 逐像素透明，靠推图，不需要圆角遮罩
+        module.attach, module.push_layered = attach_ok, push_ok
+        ok_tile = DeviceTile(make_device("b", "B", on=True), wallpaper_mode=True, opacity=0.7)
         ok_tile.show_at(QPoint(300, 300))
         app.processEvents()
+        ok_tile._flush_push()
         check("挂上后标记为壁纸层", ok_tile.wallpaper_active is True)
-        check("挂上后套上圆角遮罩", ok_tile.mask().isEmpty() is False)
-        check("挂上后坐标换算用父窗口偏移", ok_tile._screen_pos() == ok_tile.pos() + ok_tile._offset)
+        check("挂上后走分层窗口", ok_tile.layered is True)
+        check("分层时不需要圆角遮罩（圆角是抗锯齿的）", ok_tile.mask().isEmpty() is True)
+        check("推过一帧内容", calls["push"] > 0)
+        check("推的是整窗尺寸", pushed and pushed[-1] == (ok_tile.width(), ok_tile.height()))
+        check("不透明度按设置生效", abs(ok_tile._opacity - 0.7) < 1e-6)
+        check("坐标换算用父窗口偏移", ok_tile._screen_pos() == ok_tile.pos() + ok_tile._offset)
         ok_tile.hide()
 
-        # 非壁纸模式：保持半透明、不留遮罩
-        normal = DeviceTile(make_device("c", "C", on=True), wallpaper_mode=False)
+        # 3. 分层可用但推图失败 → 退回不透明 + 圆角遮罩，不能变成看不见的窗口
+        module.push_layered = lambda *args: False
+        fallback = DeviceTile(make_device("c", "C", on=True), wallpaper_mode=True)
+        fallback.show_at(QPoint(300, 300))
+        app.processEvents()
+        fallback._flush_push()
+        check("推图失败后退回普通绘制", fallback.layered is False)
+        check("推图失败后套上圆角遮罩", fallback.mask().isEmpty() is False)
+        fallback.hide()
+
+        # 4. 非壁纸模式：保持半透明、不留遮罩
+        normal = DeviceTile(make_device("d", "D", on=True), wallpaper_mode=False)
         check("普通模式仍是半透明窗口",
               normal.testAttribute(_Qt.WA_TranslucentBackground) is True)
         check("普通模式没有遮罩", normal.mask().isEmpty() is True)
         normal.close()
     finally:
-        tile_module.wallpaper.attach = original
+        module.attach, module.make_layered, module.push_layered = original
+
+
+def test_opacity(app: QApplication) -> None:
+    """卡片不透明度：夹取范围、改值不重建窗口。"""
+    board = TileBoard()
+    board.set_devices([make_device("a", "A", on=True)])
+    tile = board._tiles["a"]
+    check("默认不透明度在 0~1 之间", 0 < board.opacity <= 1)
+
+    board.set_options(opacity=0.6)
+    check("改不透明度不重建窗口", board._tiles["a"] is tile)
+    check("不透明度落到磁贴", abs(tile._opacity - 0.6) < 1e-6)
+
+    board.set_options(opacity=0.01)
+    check("低于下限被夹住", abs(tile._opacity - tile_module_min_opacity()) < 1e-6)
+
+    board.set_options(opacity=2.0)
+    check("高于上限被夹住", tile._opacity == 1.0)
+    board.close_all()
+
+
+def tile_module_min_opacity() -> float:
+    import app.widget_tile as tile_module
+
+    return tile_module.MIN_OPACITY
+
+
+def test_fonts(app: QApplication) -> None:
+    """字体切换：候选列表、应用到应用、写进 QSS。"""
+    from app import theme as theme_module
+
+    choices = theme_module.available_fonts()
+    check("字体候选第一项是系统默认", choices[0] == ("系统默认", ""))
+    # 无头环境（offscreen）里字体库是空的，这种情况下候选只有"系统默认"，
+    # 属于环境限制而不是代码问题，所以不硬断言"必须有具体字体"
+    if len(choices) > 1:
+        check("本机字体被列进候选", all(item[1] for item in choices[1:]))
+
+    original = theme_module.font_family()
+    try:
+        family = choices[1][1] if len(choices) > 1 else "SimSun"
+        theme_module.apply_font(family)
+        check("apply_font 记住了字体", theme_module.font_family() == family)
+        check("应用字体跟着变", app.font().family() == family)
+        qss = theme_module.build_qss(theme_module.build_palette("dark", "华为红"))
+        check("QSS 里注入了 font-family", f'font-family: "{family}"' in qss)
+
+        theme_module.apply_font("")
+        qss = theme_module.build_qss(theme_module.build_palette("dark", "华为红"))
+        check("选系统默认时不注入 font-family", "font-family" not in qss.splitlines()[0])
+    finally:
+        theme_module.apply_font(original)
 
 
 def test_window_behaviour(app: QApplication) -> None:
@@ -574,6 +653,8 @@ def main() -> int:
     test_card_controls(app)
     test_glow(app)
     test_wallpaper(app)
+    test_opacity(app)
+    test_fonts(app)
     test_sizes(app)
     test_set_options(app)
     test_snap(app)

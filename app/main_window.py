@@ -38,11 +38,11 @@ from .dialogs.settings_dialog import SettingsDialog
 from .tray import TrayController
 from .tray_panel import TrayPanel
 from .widget_board import WidgetBoard
-from .widget_tile import DEFAULT_GLOW, MAX_TILES, TileBoard
+from .widget_tile import DEFAULT_GLOW, DEFAULT_OPACITY, MAX_TILES, TileBoard
 from .widgets.glyph_icons import make_app_icon
 from .pages.dashboard_page import DashboardPage
 from .pages.login_page import LoginPage
-from .theme import build_qss, theme
+from .theme import apply_font, build_qss, theme
 from .widgets import motion
 from .widgets.title_bar import TitleBar
 from .widgets.toast import ToastHost
@@ -502,6 +502,7 @@ class MainWindow(QMainWindow):
             "show_summary": bool(self._settings.get("tiles_summary", True)),
             "glow": str(self._settings.get("tiles_glow", DEFAULT_GLOW)),
             "wallpaper_mode": bool(self._settings.get("tiles_wallpaper", True)),
+            "opacity": float(self._settings.get("tiles_opacity", DEFAULT_OPACITY)),
         }
 
     def _set_tile_option(self, key: str, value) -> None:
@@ -520,6 +521,22 @@ class MainWindow(QMainWindow):
 
     def _set_tile_glow(self, value: str) -> None:
         self._set_tile_option("tiles_glow", str(value))
+
+    def _set_tile_opacity(self, percent: int) -> None:
+        value = max(0.45, min(1.0, int(percent) / 100.0))
+        self._settings["tiles_opacity"] = value
+        self._save_settings()
+        self.tile_board.set_options(opacity=value)
+
+    def _set_font_family(self, family: str) -> None:
+        """换字体：立即生效，不用重启。"""
+        self._settings["font_family"] = str(family or "")
+        self._save_settings()
+        apply_font(str(family or ""))
+        self._apply_theme()
+        self.toast.show_toast(
+            f"字体已切换：{family or '系统默认'}", "info"
+        )
 
     def _set_tile_wallpaper(self, value: bool) -> None:
         self._set_tile_option("tiles_wallpaper", bool(value))
@@ -1046,6 +1063,10 @@ class MainWindow(QMainWindow):
             tile_show_summary=bool(self._settings.get("tiles_summary", True)),
             tile_glow=str(self._settings.get("tiles_glow", DEFAULT_GLOW)),
             tile_wallpaper=bool(self._settings.get("tiles_wallpaper", True)),
+            tile_opacity=int(
+                round(float(self._settings.get("tiles_opacity", DEFAULT_OPACITY)) * 100)
+            ),
+            font_family=str(self._settings.get("font_family", "")),
             board_restore=bool(self._settings.get("board_restore", True)),
             parent=self,
         )
@@ -1063,6 +1084,8 @@ class MainWindow(QMainWindow):
         dialog.tile_summary_changed.connect(self._set_tile_summary)
         dialog.tile_glow_changed.connect(self._set_tile_glow)
         dialog.tile_wallpaper_changed.connect(self._set_tile_wallpaper)
+        dialog.tile_opacity_changed.connect(self._set_tile_opacity)
+        dialog.font_changed.connect(self._set_font_family)
         dialog.board_restore_changed.connect(self._set_board_restore)
         dialog.update_ready.connect(self._on_update_ready)
         dialog.autostart_changed.connect(

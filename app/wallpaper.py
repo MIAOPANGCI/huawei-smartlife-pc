@@ -47,6 +47,11 @@ _SWP_SHOWWINDOW = 0x0040
 
 _available = sys.platform.startswith("win")
 _user32 = ctypes.WinDLL("user32", use_last_error=True) if _available else None
+_gdi32 = ctypes.WinDLL("gdi32", use_last_error=True) if _available else None
+
+_WS_EX_LAYERED = 0x00080000
+_GWL_EXSTYLE = -20
+_ULW_ALPHA = 0x00000002
 
 _ENUM_PROC = (
     ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -109,6 +114,73 @@ def _prepare() -> None:
 
 
 _prepare()
+
+class _BitmapInfoHeader(ctypes.Structure):
+    _fields_ = [
+        ("biSize", wintypes.DWORD),
+        ("biWidth", wintypes.LONG),
+        ("biHeight", wintypes.LONG),
+        ("biPlanes", wintypes.WORD),
+        ("biBitCount", wintypes.WORD),
+        ("biCompression", wintypes.DWORD),
+        ("biSizeImage", wintypes.DWORD),
+        ("biXPelsPerMeter", wintypes.LONG),
+        ("biYPelsPerMeter", wintypes.LONG),
+        ("biClrUsed", wintypes.DWORD),
+        ("biClrImportant", wintypes.DWORD),
+    ]
+
+
+class _BlendFunction(ctypes.Structure):
+    _fields_ = [
+        ("BlendOp", wintypes.BYTE),
+        ("BlendFlags", wintypes.BYTE),
+        ("SourceConstantAlpha", wintypes.BYTE),
+        ("AlphaFormat", wintypes.BYTE),
+    ]
+
+
+def _prepare_layered() -> None:
+    if not _available:
+        return
+    u, g = _user32, _gdi32
+    u.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    u.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+    u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+    u.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    u.GetDC.restype = wintypes.HDC
+    u.GetDC.argtypes = [wintypes.HWND]
+    u.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    u.UpdateLayeredWindow.restype = wintypes.BOOL
+    u.UpdateLayeredWindow.argtypes = [
+        wintypes.HWND,
+        wintypes.HDC,
+        ctypes.POINTER(wintypes.POINT),
+        ctypes.POINTER(wintypes.SIZE),
+        wintypes.HDC,
+        ctypes.POINTER(wintypes.POINT),
+        wintypes.COLORREF,
+        ctypes.POINTER(_BlendFunction),
+        wintypes.DWORD,
+    ]
+    g.CreateCompatibleDC.restype = wintypes.HDC
+    g.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    g.CreateDIBSection.restype = wintypes.HBITMAP
+    g.CreateDIBSection.argtypes = [
+        wintypes.HDC,
+        ctypes.c_void_p,
+        wintypes.UINT,
+        ctypes.POINTER(ctypes.c_void_p),
+        wintypes.HANDLE,
+        wintypes.DWORD,
+    ]
+    g.SelectObject.restype = wintypes.HGDIOBJ
+    g.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+    g.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    g.DeleteDC.argtypes = [wintypes.HDC]
+
+
+_prepare_layered()
 
 _GA_PARENT = 1
 
@@ -248,3 +320,80 @@ def raise_in_parent(hwnd: int) -> None:
         wintypes.HWND(hwnd), wintypes.HWND(0), 0, 0, 0, 0,
         _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE,
     )
+
+
+def make_layered(hwnd: int) -> bool:
+    """给窗口加上 WS_EX_LAYERED。
+
+    Win8 起**子窗口也支持分层窗口**，所以壁纸层里的磁贴不用再牺牲成"不透明 +
+    区域遮罩"，可以做到逐像素透明（圆角平滑、壁纸透出来）。
+    注意 Qt 的 ``WA_TranslucentBackground`` 走的是另一条路，挂到桌面层后完全不渲染，
+    所以这里不靠它，而是自己用 ``UpdateLayeredWindow`` 推图。
+    """
+    if not _available or not hwnd:
+        return False
+    if not _user32.IsWindow(wintypes.HWND(hwnd)):
+        return False
+    style = _user32.GetWindowLongPtrW(wintypes.HWND(hwnd), _GWL_EXSTYLE)
+    if not style & _WS_EX_LAYERED:
+        _user32.SetWindowLongPtrW(
+            wintypes.HWND(hwnd), _GWL_EXSTYLE, style | _WS_EX_LAYERED
+        )
+    return True
+
+
+def push_layered(hwnd: int, image, x: int, y: int) -> bool:
+    """把一张带透明通道的图推给分层窗口。
+
+    分层窗口的内容只能通过 ``UpdateLayeredWindow`` 设置（普通 GDI 绘制会被忽略），
+    所以要由调用方把整个窗口渲染成 QImage 再交进来。``x/y`` 是相对父窗口的坐标。
+    """
+    if not _available or not hwnd:
+        return False
+
+    from PySide6.QtGui import QImage
+
+    if not isinstance(image, QImage):
+        return False
+    frame = image.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+    width, height = frame.width(), frame.height()
+    if width <= 0 or height <= 0:
+        return False
+
+    header = _BitmapInfoHeader()
+    header.biSize = ctypes.sizeof(_BitmapInfoHeader)
+    header.biWidth = width
+    header.biHeight = -height          # 负数 = 自上而下，和 QImage 的行序一致
+    header.biPlanes = 1
+    header.biBitCount = 32
+
+    bits = ctypes.c_void_p()
+    screen_dc = _user32.GetDC(None)
+    mem_dc = _gdi32.CreateCompatibleDC(screen_dc)
+    bitmap = _gdi32.CreateDIBSection(
+        mem_dc, ctypes.byref(header), 0, ctypes.byref(bits), None, 0
+    )
+    try:
+        _gdi32.SelectObject(mem_dc, bitmap)
+        ctypes.memmove(bits, bytes(frame.constBits()), width * height * 4)
+        dst = wintypes.POINT(int(x), int(y))
+        size = wintypes.SIZE(width, height)
+        src = wintypes.POINT(0, 0)
+        blend = _BlendFunction(0, 0, 255, 1)     # AC_SRC_OVER + AC_SRC_ALPHA
+        return bool(
+            _user32.UpdateLayeredWindow(
+                wintypes.HWND(hwnd),
+                screen_dc,
+                ctypes.byref(dst),
+                ctypes.byref(size),
+                mem_dc,
+                ctypes.byref(src),
+                0,
+                ctypes.byref(blend),
+                _ULW_ALPHA,
+            )
+        )
+    finally:
+        _gdi32.DeleteObject(bitmap)
+        _gdi32.DeleteDC(mem_dc)
+        _user32.ReleaseDC(None, screen_dc)

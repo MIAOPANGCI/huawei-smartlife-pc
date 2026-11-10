@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from . import autostart, dispatch
 from .controller import APP_DIR, UI_SETTINGS_PATH
 from .main_window import MainWindow
-from .theme import DEFAULT_ACCENT, set_theme
+from .theme import DEFAULT_ACCENT, apply_font, set_theme
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -292,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
     mode = settings.get("mode", "dark")
     accent = settings.get("accent", DEFAULT_ACCENT)
     set_theme(mode, accent)
+    # 字体要在任何控件创建之前装上，否则先建的那批控件还是旧字体
+    apply_font(str(settings.get("font_family", "") or ""))
     app.setWindowIcon(make_app_icon())
     # 主线程投递器：所有跨线程回调都经它回到主线程（见 app/dispatch.py）
     dispatch.attach()

@@ -27,6 +27,66 @@ ACCENT_PRESETS: Final[dict[str, str]] = {
 }
 DEFAULT_ACCENT: Final[str] = "华为红"
 
+# ---------------------------------------------------------------------------
+# 字体
+# ---------------------------------------------------------------------------
+# 空串 = 跟随系统默认。其它选项在设置里按"本机装没装"过滤后再列出来。
+FONT_CHOICES: tuple[tuple[str, str], ...] = (
+    ("微软雅黑", "Microsoft YaHei UI"),
+    ("等线", "DengXian"),
+    ("宋体", "SimSun"),
+    ("黑体", "SimHei"),
+    ("楷体", "KaiTi"),
+    ("Segoe UI", "Segoe UI"),
+    ("Arial", "Arial"),
+)
+
+_font_family = ""
+_default_font_family = ""
+
+
+def font_family() -> str:
+    """当前选择的字体；空串表示跟随系统。"""
+    return _font_family
+
+
+def set_font_family(family: str) -> None:
+    """只记下来，真正生效要重新 build_qss（见 apply_font）。"""
+    global _font_family
+    _font_family = str(family or "")
+
+
+def available_fonts() -> list[tuple[str, str]]:
+    """本机可用的字体候选：``[(显示名, family)]``，第一项是"系统默认"。"""
+    from PySide6.QtGui import QFontDatabase
+
+    families = {name.lower(): name for name in QFontDatabase.families()}
+    choices: list[tuple[str, str]] = [("系统默认", "")]
+    for label, name in FONT_CHOICES:
+        real = families.get(name.lower())
+        if real:
+            choices.append((label, real))
+    return choices
+
+
+def apply_font(family: str) -> None:
+    """把字体应用到整个应用（并记进 build_qss 用的全局）。"""
+    global _default_font_family
+
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is not None and not _default_font_family:
+        _default_font_family = app.font().family()
+
+    set_font_family(family)
+    if app is None:
+        return
+    font = app.font()
+    font.setFamily(family or _default_font_family)
+    app.setFont(font)
+
+
 
 @dataclass(frozen=True)
 class Palette:
@@ -1058,6 +1118,10 @@ QMessageBox QLabel {
 def build_qss(palette: Palette) -> str:
     """把调色板注入 QSS 模板。"""
     qss = _QSS
+    if _font_family:
+        # 单独一条 QWidget 规则：后面的规则只设 font-size / weight，不设 family，
+        # 字体能一路继承；换字体只需重发样式表
+        qss = 'QWidget { font-family: "%s"; }\n' % _font_family + qss
     mapping = palette.as_mapping()
     # 长键优先替换，避免 @border 命中 @border_soft 的前缀
     for key in sorted(mapping, key=len, reverse=True):

@@ -18,11 +18,12 @@ from __future__ import annotations
 import math
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBitmap,
     QColor,
     QGuiApplication,
+    QImage,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -73,6 +74,10 @@ GLOW_LEVELS: dict[str, float] = {
 }
 DEFAULT_GLOW = "balanced"
 GLOW_MODES = tuple(GLOW_LEVELS)
+
+# 卡片底色不透明度（0~1）。壁纸层下这个值直接决定"透出多少壁纸"
+DEFAULT_OPACITY = 0.86
+MIN_OPACITY = 0.45
 
 # 标准档的尺寸，保留这两个名字给自检和默认位置计算用
 TILE_WIDTH = TILE_SIZES[DEFAULT_SIZE][0]
@@ -263,6 +268,7 @@ class DeviceTile(QWidget):
         align: str = "free",
         glow: str = DEFAULT_GLOW,
         wallpaper_mode: bool = False,
+        opacity: float = DEFAULT_OPACITY,
     ) -> None:
         # parent 传 None：挂到主窗口下的话，主窗口最小化会把磁贴一起藏起来。
         #
@@ -274,6 +280,9 @@ class DeviceTile(QWidget):
         )
         self._wallpaper_wanted = bool(wallpaper_mode) and wallpaper.supported()
         self._wallpaper_active = False
+        self._layered = False           # 壁纸层里靠 UpdateLayeredWindow 推图
+        self._rendering = False          # 正在离屏渲染（防止事件过滤器递归）
+        self._push_dirty = False
         self._offset = QPoint(0, 0)
         # 壁纸层是往桌面窗口里 SetParent，子窗口不支持分层窗口——
         # 设了 WA_TranslucentBackground 的话挂上去会**完全不渲染**。
@@ -286,6 +295,7 @@ class DeviceTile(QWidget):
         self._show_summary = bool(show_summary) and size_shows_summary
         self._align = align if align in ALIGN_MODES else "free"
         self._glow = glow if glow in GLOW_LEVELS else DEFAULT_GLOW
+        self._opacity = min(1.0, max(MIN_OPACITY, float(opacity)))
         self._dev_id = device.dev_id
         self._drag_offset: QPoint | None = None
         self.setCursor(Qt.PointingHandCursor)
@@ -305,6 +315,14 @@ class DeviceTile(QWidget):
         self._watch.timeout.connect(self._watch_wallpaper)
         if self._wallpaper_wanted:
             self._watch.start()
+
+        # 分层窗口的内容全靠自己推，子控件重绘也要跟着推一次
+        self._push_timer = QTimer(self)
+        self._push_timer.setSingleShot(True)
+        self._push_timer.setInterval(16)
+        self._push_timer.timeout.connect(self._flush_push)
+        for child in self.findChildren(QWidget):
+            child.installEventFilter(self)
 
     # ---- 构建 ----
     @property
@@ -490,20 +508,15 @@ class DeviceTile(QWidget):
     def _card_color(self) -> QColor:
         pal = theme().palette
         base = QColor(pal.surface_2 if self._body.property("offline") == "true" else pal.surface)
-        # 壁纸模式下窗口必须完全不透明（子窗口不能分层），普通模式留一点点透明度
-        base.setAlpha(255 if self._wallpaper_active else 242)
+        base.setAlphaF(self._opacity)
         return base
 
     def _border_color(self) -> QColor:
         pal = theme().palette
         if self.underMouse():
             return QColor(pal.accent)
-        if self._wallpaper_active:
-            edge = QColor("#ffffff" if pal.mode == "dark" else "#000000")
-            edge.setAlpha(26)
-            return edge
         soft = QColor(pal.text)
-        soft.setAlpha(24)
+        soft.setAlpha(30)
         return soft
 
     def _glow_blobs(self, card: QRectF) -> list[tuple[QPointF, float, QColor, float]]:
@@ -603,9 +616,7 @@ class DeviceTile(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
 
-        # 卡外的光晕（壁纸模式下被遮罩切掉，所以只在普通模式画）
-        if not self._wallpaper_active:
-            self._paint_halo(painter, card)
+        self._paint_halo(painter, card)
 
         painter.fillPath(path, self._card_color())
 
@@ -621,6 +632,10 @@ class DeviceTile(QWidget):
         painter.drawPath(path)
         painter.end()
 
+        # 分层窗口要自己把内容推上去
+        if self._layered and not self._rendering:
+            self.schedule_push()
+
     def enterEvent(self, event) -> None:  # noqa: N802 - Qt 接口
         self.update()
         super().enterEvent(event)
@@ -634,13 +649,17 @@ class DeviceTile(QWidget):
     def wallpaper_active(self) -> bool:
         return self._wallpaper_active
 
-    def _apply_mask(self) -> None:
-        """壁纸模式下用圆角 region 切掉四角。
+    @property
+    def layered(self) -> bool:
+        return self._layered
 
-        子窗口不能用分层窗口（半透明），所以四角只能靠 region 硬切——
-        边缘会有一点锯齿，但这是不透明子窗口唯一的做法。
+    def _apply_mask(self) -> None:
+        """退路：推图失败时用圆角 region 硬切四角（边缘会有锯齿）。
+
+        只在 ``UpdateLayeredWindow`` 不可用时才走这里，正常情况下走分层窗口，
+        圆角是抗锯齿的。
         """
-        if not self._wallpaper_active:
+        if not self._wallpaper_active or self._layered:
             self.clearMask()
             return
         bitmap = QBitmap(self.size())
@@ -657,7 +676,8 @@ class DeviceTile(QWidget):
         if not self._wallpaper_wanted or self._wallpaper_active:
             return
         screen_pos = self._screen_pos()
-        offset = wallpaper.attach(int(self.winId()))
+        hwnd = int(self.winId())
+        offset = wallpaper.attach(hwnd)
         if offset is None:
             # 挂不上就老实当普通窗口：宁可少一个特性，也别变成一个看不见的窗口
             self._wallpaper_wanted = False
@@ -665,19 +685,68 @@ class DeviceTile(QWidget):
             return
         self._offset = QPoint(int(offset[0]), int(offset[1]))
         self._wallpaper_active = True
-        self._apply_mask()
         self.move(self._to_parent(screen_pos))
-        self.update()
+
+        # 挂成子窗口之后，Qt 自己的绘制是被忽略的（分层窗口只认 UpdateLayeredWindow），
+        # 所以要么整份内容自己推，要么什么都看不到
+        self._layered = wallpaper.make_layered(hwnd)
+        if self._layered:
+            self.clearMask()
+            self.schedule_push()
+        else:
+            self._apply_mask()
+            self.update()
 
     def _watch_wallpaper(self) -> None:
         """Explorer 重启后父窗口会消失，定期检查并重挂。"""
         if not self._wallpaper_wanted or not self.isVisible():
             return
         if wallpaper.is_attached(int(self.winId())):
+            if self._layered:
+                return
+            self._ensure_wallpaper()
             return
         self._wallpaper_active = False
+        self._layered = False
         self.clearMask()
         self._ensure_wallpaper()
+
+    def schedule_push(self) -> None:
+        """安排一次内容推送（16ms 合并多次重绘）。"""
+        if not self._layered or self._rendering:
+            return
+        self._push_dirty = True
+        if not self._push_timer.isActive():
+            self._push_timer.start()
+
+    def _flush_push(self) -> None:
+        if not self._layered or not self._wallpaper_active or not self._push_dirty:
+            return
+        self._push_dirty = False
+
+        image = QImage(self.size(), QImage.Format_ARGB32_Premultiplied)
+        image.fill(Qt.transparent)
+        self._rendering = True
+        try:
+            # 连子控件一起渲染：分层窗口里按钮、文字都只能靠这张图
+            self.render(
+                image, QPoint(0, 0), QRegion(), QWidget.RenderFlags(QWidget.DrawChildren)
+            )
+        finally:
+            self._rendering = False
+
+        hwnd = int(self.winId())
+        if wallpaper.push_layered(hwnd, image, self.pos().x(), self.pos().y()):
+            return
+        # 推不上去就别硬撑：退回不透明 + 圆角遮罩，至少还能看见
+        self._layered = False
+        self._apply_mask()
+        self.update()
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt 接口
+        if event.type() == QEvent.Paint and self._layered and not self._rendering:
+            self.schedule_push()
+        return super().eventFilter(obj, event)
 
     # ---- 显示 / 位置 ----
     def _screen_pos(self) -> QPoint:
@@ -704,6 +773,14 @@ class DeviceTile(QWidget):
     def set_summary_visible(self, visible: bool) -> None:
         self._show_summary = bool(visible)
         self._summary.setVisible(self._show_summary and size_spec(self._size_key)[4])
+
+    def set_opacity(self, value: float) -> None:
+        """卡片不透明度（0.45~1）。壁纸层下这个值决定透出多少壁纸。"""
+        value = min(1.0, max(MIN_OPACITY, float(value)))
+        if abs(value - self._opacity) < 1e-3:
+            return
+        self._opacity = value
+        self.update()
 
     def set_glow(self, level: str) -> None:
         if level not in GLOW_LEVELS or level == self._glow:
@@ -814,6 +891,7 @@ class TileBoard:
         show_summary: bool = True,
         glow: str = DEFAULT_GLOW,
         wallpaper_mode: bool = False,
+        opacity: float = DEFAULT_OPACITY,
     ) -> None:
         self._positions: dict[str, QPoint] = {}
         for dev_id, value in (positions or {}).items():
@@ -831,6 +909,7 @@ class TileBoard:
         self._show_summary = bool(show_summary)
         self._glow = glow if glow in GLOW_LEVELS else DEFAULT_GLOW
         self._wallpaper_mode = bool(wallpaper_mode)
+        self._opacity = min(1.0, max(MIN_OPACITY, float(opacity)))
         self.on_power: Callable[[str], None] | None = None
         self.on_command: Callable[[str, str, dict], None] | None = None
         self.on_detail: Callable[[str], None] | None = None
@@ -859,6 +938,10 @@ class TileBoard:
     def wallpaper_mode(self) -> bool:
         return self._wallpaper_mode
 
+    @property
+    def opacity(self) -> float:
+        return self._opacity
+
     def set_options(
         self,
         *,
@@ -867,6 +950,7 @@ class TileBoard:
         show_summary: bool | None = None,
         glow: str | None = None,
         wallpaper_mode: bool | None = None,
+        opacity: float | None = None,
     ) -> None:
         """改外观。
 
@@ -886,6 +970,8 @@ class TileBoard:
             self._show_summary = bool(show_summary)
         if glow is not None and glow in GLOW_LEVELS:
             self._glow = glow
+        if opacity is not None:
+            self._opacity = min(1.0, max(MIN_OPACITY, float(opacity)))
 
         if rebuild:
             self._rebuild()
@@ -894,6 +980,7 @@ class TileBoard:
             tile.apply_align(self._align)
             tile.set_summary_visible(self._show_summary)
             tile.set_glow(self._glow)
+            tile.set_opacity(self._opacity)
 
     def _rebuild(self) -> None:
         """按新尺寸 / 新窗口属性重建所有磁贴，位置原样保留。"""
@@ -931,6 +1018,7 @@ class TileBoard:
                 align=self._align,
                 glow=self._glow,
                 wallpaper_mode=self._wallpaper_mode,
+                opacity=self._opacity,
             )
             tile.power_requested.connect(self._forward_power)
             tile.command_requested.connect(self._forward_command)

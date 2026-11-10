@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from .. import audio as audio_module
 from .. import autostart, updater
-from ..theme import ACCENT_PRESETS, theme
+from ..theme import ACCENT_PRESETS, available_fonts, theme
 from ..workers import run_async
 from huawei_smartlife.version import VERSION
 
@@ -82,6 +82,8 @@ class SettingsDialog(QDialog):
     tile_summary_changed = Signal(bool)
     tile_glow_changed = Signal(str)
     tile_wallpaper_changed = Signal(bool)
+    tile_opacity_changed = Signal(int)
+    font_changed = Signal(str)
     board_restore_changed = Signal(bool)
     autostart_changed = Signal(bool)
     update_ready = Signal(str)          # 新版本目录，由主窗口接手替换
@@ -104,6 +106,8 @@ class SettingsDialog(QDialog):
         tile_show_summary: bool = True,
         tile_glow: str = "balanced",
         tile_wallpaper: bool = True,
+        tile_opacity: int = 86,
+        font_family: str = "",
         board_restore: bool = True,
         autostart_enabled: bool | None = None,
         parent: QWidget | None = None,
@@ -131,6 +135,8 @@ class SettingsDialog(QDialog):
         self._tile_show_summary = bool(tile_show_summary)
         self._tile_glow = tile_glow
         self._tile_wallpaper = bool(tile_wallpaper)
+        self._tile_opacity = max(45, min(100, int(tile_opacity)))
+        self._font_family = str(font_family or "")
         self._board_restore = bool(board_restore)
         # None = 问注册表要真实状态（设置项本身可能存在注册表里、不一定写过 settings）
         self._autostart_enabled = (
@@ -276,6 +282,22 @@ class SettingsDialog(QDialog):
             accent_row.addWidget(swatch)
         accent_row.addStretch(1)
         layout.addLayout(accent_row)
+
+        font_row = QHBoxLayout()
+        font_row.setSpacing(10)
+        font_label = QLabel("字体")
+        font_label.setObjectName("Body")
+        font_row.addWidget(font_label)
+        self._font_combo = QComboBox()
+        self._font_combo.setMinimumWidth(150)
+        self._fill_combo(self._font_combo, available_fonts(), self._font_family)
+        self._font_combo.setToolTip(
+            "只列出本机已装的字体；选「系统默认」跟随 Windows 设置"
+        )
+        self._font_combo.currentIndexChanged.connect(self._on_font_changed)
+        font_row.addWidget(self._font_combo, 1)
+        font_row.addStretch(1)
+        layout.addLayout(font_row)
 
         self._motion_box = QCheckBox("界面动画（卡片淡入、窗口滑入）")
         self._motion_box.setChecked(self._motion_enabled)
@@ -640,6 +662,23 @@ class SettingsDialog(QDialog):
         self._tile_summary_box.toggled.connect(self.tile_summary_changed.emit)
         layout.addWidget(self._tile_summary_box)
 
+        opacity_row = QHBoxLayout()
+        opacity_row.setSpacing(10)
+        opacity_label = QLabel("卡片不透明度")
+        opacity_label.setObjectName("Body")
+        opacity_row.addWidget(opacity_label)
+        self._tile_opacity_slider = QSlider(Qt.Horizontal)
+        self._tile_opacity_slider.setRange(45, 100)
+        self._tile_opacity_slider.setValue(self._tile_opacity)
+        self._tile_opacity_slider.setMinimumWidth(120)
+        opacity_row.addWidget(self._tile_opacity_slider, 1)
+        self._tile_opacity_label = QLabel(f"{self._tile_opacity}%")
+        self._tile_opacity_label.setObjectName("Body")
+        self._tile_opacity_label.setMinimumWidth(38)
+        opacity_row.addWidget(self._tile_opacity_label)
+        layout.addLayout(opacity_row)
+        self._tile_opacity_slider.valueChanged.connect(self._on_tile_opacity)
+
         self._tile_wallpaper_box = QCheckBox("钉在桌面壁纸层（桌面图标那一层）")
         self._tile_wallpaper_box.setChecked(self._tile_wallpaper)
         self._tile_wallpaper_box.setToolTip(
@@ -670,6 +709,16 @@ class SettingsDialog(QDialog):
         if key:
             self._tile_align = str(key)
             self.tile_align_changed.emit(self._tile_align)
+
+    def _on_font_changed(self, index: int) -> None:
+        key = self._font_combo.itemData(index)
+        self._font_family = str(key or "")
+        self.font_changed.emit(self._font_family)
+
+    def _on_tile_opacity(self, value: int) -> None:
+        self._tile_opacity = int(value)
+        self._tile_opacity_label.setText(f"{value}%")
+        self.tile_opacity_changed.emit(int(value))
 
     def _on_tile_glow(self, index: int) -> None:
         key = self._tile_glow_combo.itemData(index)

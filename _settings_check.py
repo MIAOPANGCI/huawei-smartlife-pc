@@ -176,6 +176,24 @@ def main() -> int:
     tile_dialog._tile_wallpaper_box.setChecked(True)
     app.processEvents()
     check("壁纸层开关发出信号", wallpaper_picks == [True])
+
+    check("不透明度按设置初始化", tile_dialog._tile_opacity_slider.value() == 86)
+    check("不透明度标签跟着显示", tile_dialog._tile_opacity_label.text() == "86%")
+    opacity_picks: list[int] = []
+    tile_dialog.tile_opacity_changed.connect(opacity_picks.append)
+    tile_dialog._tile_opacity_slider.setValue(60)
+    app.processEvents()
+    check("拖不透明度发出信号", opacity_picks == [60])
+    check("不透明度标签跟着变", tile_dialog._tile_opacity_label.text() == "60%")
+
+    check("字体候选第一项是系统默认",
+          tile_dialog._font_combo.itemData(0) == "")
+    font_picks: list[str] = []
+    tile_dialog.font_changed.connect(font_picks.append)
+    if tile_dialog._font_combo.count() > 1:
+        tile_dialog._font_combo.setCurrentIndex(1)
+        app.processEvents()
+        check("换字体发出信号", font_picks == [tile_dialog._font_combo.itemData(1)])
     tile_dialog.close()
 
     # ---- 6. 隐藏启动（--tray）但恢复不出会话时，窗口必须自己出现 ----
@@ -257,6 +275,23 @@ def main() -> int:
     check("壁纸层应用到磁贴板", hidden.tile_board.wallpaper_mode is False)
     hidden._set_tile_wallpaper(True)
     hidden._set_tile_glow("balanced")
+
+    hidden._set_tile_opacity(65)
+    check("不透明度写进设置", abs(hidden._settings.get("tiles_opacity", 0) - 0.65) < 1e-6)
+    check("不透明度应用到磁贴板", abs(hidden.tile_board.opacity - 0.65) < 1e-6)
+    hidden._set_tile_opacity(10)
+    check("不透明度低于下限被夹住", hidden.tile_board.opacity >= 0.45)
+    hidden._set_tile_opacity(86)
+
+    # 字体：写设置 + 应用到整个应用 + 写进样式表
+    from app import theme as theme_module
+
+    before_font = theme_module.font_family()
+    hidden._set_font_family("SimSun")
+    check("字体写进设置", hidden._settings.get("font_family") == "SimSun")
+    check("字体应用到应用", theme_module.font_family() == "SimSun")
+    hidden._set_font_family(before_font)
+    check("字体能切回原值", theme_module.font_family() == before_font)
 
     hidden.close()
 
