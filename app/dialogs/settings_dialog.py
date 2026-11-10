@@ -77,6 +77,9 @@ class SettingsDialog(QDialog):
     raw_protocol_changed = Signal(bool)
     camera_default_changed = Signal(str)
     default_volume_changed = Signal(float)
+    tile_size_changed = Signal(str)
+    tile_align_changed = Signal(str)
+    tile_summary_changed = Signal(bool)
     board_restore_changed = Signal(bool)
     autostart_changed = Signal(bool)
     update_ready = Signal(str)          # 新版本目录，由主窗口接手替换
@@ -94,6 +97,9 @@ class SettingsDialog(QDialog):
         cameras: list[tuple[str, str]] | None = None,
         camera_default: str = "",
         default_volume: float = 1.0,
+        tile_size: str = "standard",
+        tile_align: str = "free",
+        tile_show_summary: bool = True,
         board_restore: bool = True,
         autostart_enabled: bool | None = None,
         parent: QWidget | None = None,
@@ -116,6 +122,9 @@ class SettingsDialog(QDialog):
         self._cameras = cameras or []
         self._camera_default = camera_default
         self._default_volume = max(0.0, min(audio_module.MAX_VOLUME, float(default_volume)))
+        self._tile_size = tile_size
+        self._tile_align = tile_align
+        self._tile_show_summary = bool(tile_show_summary)
         self._board_restore = bool(board_restore)
         # None = 问注册表要真实状态（设置项本身可能存在注册表里、不一定写过 settings）
         self._autostart_enabled = (
@@ -179,6 +188,8 @@ class SettingsDialog(QDialog):
         self._build_camera(self._right)
         self._right.addWidget(self._divider())
         self._build_board(self._right)
+        self._right.addWidget(self._divider())
+        self._build_tiles(self._right)
         self._right.addWidget(self._divider())
         self._build_diagnosis(self._right)
         self._right.addWidget(self._divider())
@@ -539,6 +550,75 @@ class SettingsDialog(QDialog):
         self._default_volume = value / 100.0
         self._refresh_volume_label()
         self.default_volume_changed.emit(self._default_volume)
+
+    # ---- 桌面磁贴 ----
+    def _build_tiles(self, layout: QVBoxLayout) -> None:
+        layout.addWidget(self._section("桌面磁贴"))
+        layout.addWidget(
+            self._hint("每台设备一块独立小方块，托盘右键「桌面磁贴」显示或隐藏。")
+        )
+
+        self._tile_size_combo = QComboBox()
+        self._tile_size_combo.setMinimumWidth(88)
+        self._fill_combo(
+            self._tile_size_combo,
+            [("紧凑", "compact"), ("标准", "standard"), ("大", "large")],
+            self._tile_size,
+        )
+        self._tile_size_combo.currentIndexChanged.connect(self._on_tile_size)
+
+        self._tile_align_combo = QComboBox()
+        self._tile_align_combo.setMinimumWidth(96)
+        self._fill_combo(
+            self._tile_align_combo,
+            [("自由摆放", "free"), ("网格对齐", "grid"), ("贴边吸附", "edge")],
+            self._tile_align,
+        )
+        self._tile_align_combo.setToolTip(
+            "网格对齐：松手时坐标吸到 16 像素的整数倍，几块之间能排整齐\n"
+            "贴边吸附：靠近屏幕边缘时自动贴上去"
+        )
+        self._tile_align_combo.currentIndexChanged.connect(self._on_tile_align)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        first = QLabel("尺寸")
+        first.setObjectName("Body")
+        row.addWidget(first, 0)
+        row.addWidget(self._tile_size_combo, 1)
+        row.addSpacing(12)
+        second = QLabel("拖动对齐")
+        second.setObjectName("Body")
+        row.addWidget(second, 0)
+        row.addWidget(self._tile_align_combo, 1)
+        layout.addLayout(row)
+
+        self._tile_summary_box = QCheckBox("磁贴上显示状态文字（温度、亮度这类读数）")
+        self._tile_summary_box.setChecked(self._tile_show_summary)
+        self._tile_summary_box.setToolTip("紧凑尺寸下会自动省掉这一行，避免挤在一起")
+        self._tile_summary_box.toggled.connect(self.tile_summary_changed.emit)
+        layout.addWidget(self._tile_summary_box)
+
+    @staticmethod
+    def _fill_combo(combo: QComboBox, options: list[tuple[str, str]], current: str) -> None:
+        index = 0
+        for position, (label, key) in enumerate(options):
+            combo.addItem(label, key)
+            if key == current:
+                index = position
+        combo.setCurrentIndex(index)
+
+    def _on_tile_size(self, index: int) -> None:
+        key = self._tile_size_combo.itemData(index)
+        if key:
+            self._tile_size = str(key)
+            self.tile_size_changed.emit(self._tile_size)
+
+    def _on_tile_align(self, index: int) -> None:
+        key = self._tile_align_combo.itemData(index)
+        if key:
+            self._tile_align = str(key)
+            self.tile_align_changed.emit(self._tile_align)
 
     # ---- 桌面挂件 ----
     def _build_board(self, layout: QVBoxLayout) -> None:

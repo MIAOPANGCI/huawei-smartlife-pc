@@ -18,6 +18,7 @@ class TrayController(QObject):
     open_main = Signal()
     open_board = Signal()
     open_tiles = Signal()
+    tiles_settings = Signal()
     open_wall = Signal()
     quit_requested = Signal()
 
@@ -31,6 +32,7 @@ class TrayController(QObject):
         menu.addAction("托盘面板", self.open_panel.emit)
         menu.addAction("桌面挂件", self.open_board.emit)
         menu.addAction("桌面磁贴", self.open_tiles.emit)
+        menu.addAction("磁贴设置…", self.tiles_settings.emit)
         menu.addAction("多路同屏", self.open_wall.emit)
         menu.addSeparator()
         menu.addAction("退出", self.quit_requested.emit)

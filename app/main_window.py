@@ -38,7 +38,7 @@ from .dialogs.settings_dialog import SettingsDialog
 from .tray import TrayController
 from .tray_panel import TrayPanel
 from .widget_board import WidgetBoard
-from .widget_tile import TileBoard
+from .widget_tile import MAX_TILES, TileBoard
 from .widgets.glyph_icons import make_app_icon
 from .pages.dashboard_page import DashboardPage
 from .pages.login_page import LoginPage
@@ -172,15 +172,19 @@ class MainWindow(QMainWindow):
         self.board = WidgetBoard(board_state)
         # 桌面磁贴：每台设备一块独立小窗，和挂件并存、各有各的开关。
         # 位置按 dev_id 存，换设备顺序不会串位。
-        self.tile_board = TileBoard(self._settings.get("tiles_positions"))
+        self.tile_board = TileBoard(
+            self._settings.get("tiles_positions"), **self._tile_options()
+        )
         self.tile_board.on_power = self._on_power_requested
         self.tile_board.on_state_changed = self._on_tiles_state_changed
         self.tile_board.on_dismissed = self._on_tile_dismissed
+        self.tile_board.on_settings = self._edit_tiles_devices
 
         self.tray.open_panel.connect(self._show_tray_panel)
         self.tray.open_main.connect(self._show_main_window)
         self.tray.open_board.connect(self._show_board)
         self.tray.open_tiles.connect(self._show_tiles)
+        self.tray.tiles_settings.connect(self._edit_tiles_devices)
         self.tray.open_wall.connect(self._open_camera_wall)
         self.tray.quit_requested.connect(self._quit_app)
 
@@ -487,6 +491,38 @@ class MainWindow(QMainWindow):
             return
         self._show_tiles()
         _LOGGER.info("桌面磁贴恢复：%s 块", self.tile_board.count)
+
+    def _tile_options(self) -> dict:
+        """磁贴外观选项。键名和 TileBoard.set_options 的参数一致。"""
+        return {
+            "size_key": str(self._settings.get("tiles_size", "standard")),
+            "align": str(self._settings.get("tiles_align", "free")),
+            "show_summary": bool(self._settings.get("tiles_summary", True)),
+        }
+
+    def _set_tile_option(self, key: str, value) -> None:
+        self._settings[key] = value
+        self._save_settings()
+        self.tile_board.set_options(**self._tile_options())
+
+    def _set_tile_size(self, value: str) -> None:
+        self._set_tile_option("tiles_size", value)
+
+    def _set_tile_align(self, value: str) -> None:
+        self._set_tile_option("tiles_align", value)
+
+    def _set_tile_summary(self, value: bool) -> None:
+        self._set_tile_option("tiles_summary", bool(value))
+
+    def _edit_tiles_devices(self) -> None:
+        """磁贴上放哪几台设备、什么顺序。"""
+        self._edit_device_selection(
+            "tiles_devices",
+            "桌面磁贴 · 自选与排序",
+            MAX_TILES,
+            require_switch=True,
+            on_done=self._sync_board_devices,
+        )
 
     def _on_tiles_state_changed(self, state: dict) -> None:
         self._settings["tiles_positions"] = state
@@ -990,6 +1026,9 @@ class MainWindow(QMainWindow):
             cameras=[(item["name"], str(item["key"])) for item in self._camera_targets()],
             camera_default=str(self._settings.get("camera_default") or ""),
             default_volume=float(self._settings.get("audio_volume", 1.0) or 1.0),
+            tile_size=str(self._settings.get("tiles_size", "standard")),
+            tile_align=str(self._settings.get("tiles_align", "free")),
+            tile_show_summary=bool(self._settings.get("tiles_summary", True)),
             board_restore=bool(self._settings.get("board_restore", True)),
             parent=self,
         )
@@ -1002,6 +1041,9 @@ class MainWindow(QMainWindow):
         dialog.raw_protocol_changed.connect(self._set_raw_protocol)
         dialog.camera_default_changed.connect(self._set_camera_default)
         dialog.default_volume_changed.connect(self._set_audio_volume)
+        dialog.tile_size_changed.connect(self._set_tile_size)
+        dialog.tile_align_changed.connect(self._set_tile_align)
+        dialog.tile_summary_changed.connect(self._set_tile_summary)
         dialog.board_restore_changed.connect(self._set_board_restore)
         dialog.update_ready.connect(self._on_update_ready)
         dialog.autostart_changed.connect(

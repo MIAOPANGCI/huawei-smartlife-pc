@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from app.theme import set_theme  # noqa: E402
 from app.widget_tile import (  # noqa: E402
     TILE_HEIGHT,
+    TILE_SIZES,
     TILE_WIDTH,
     DeviceTile,
     TileBoard,
@@ -278,6 +279,96 @@ def test_integration(app: QApplication) -> None:
     window.close()
 
 
+def test_sizes(app: QApplication) -> None:
+    """三档尺寸都要真的换了尺寸，紧凑档还要自动省掉状态文字。"""
+    for key, (width, height, _icon, _power, shows_summary) in TILE_SIZES.items():
+        tile = DeviceTile(make_device("a", "A", on=True, temp=40), size_key=key)
+        check(f"尺寸档 {key} 生效", (tile.width(), tile.height()) == (width, height))
+        check(
+            f"尺寸档 {key} 的状态文字可见性",
+            tile._summary.isVisibleTo(tile) is shows_summary,
+        )
+        tile.close()
+        tile.deleteLater()
+
+
+def test_set_options(app: QApplication) -> None:
+    board = TileBoard()
+    board.set_devices([make_device("a", "A", on=True)])
+    first = board._tiles["a"]
+    check("默认是标准尺寸", (first.width(), first.height()) == (TILE_WIDTH, TILE_HEIGHT))
+
+    board.set_options(align="grid")
+    check("改对齐不重建窗口", board._tiles["a"] is first)
+    check("对齐选项已更新", board.align == "grid")
+
+    board.set_options(show_summary=False)
+    check("关掉状态文字", board._tiles["a"]._summary.isHidden() is True)
+    board.set_options(show_summary=True)
+    check("再打开状态文字", board._tiles["a"]._summary.isHidden() is False)
+
+    board.set_options(size_key="large")
+    check("改尺寸会重建窗口", board._tiles["a"] is not first)
+    check("新尺寸生效", board._tiles["a"].width() == TILE_SIZES["large"][0])
+    check("重建后设备还在", board.count == 1)
+
+    board.set_options(size_key="紧凑")     # 非法值应被忽略，不能把磁贴搞成 0 尺寸
+    check("非法尺寸被忽略", board.size_key == "large")
+
+
+def test_snap(app: QApplication) -> None:
+    """拖动松手时按对齐方式吸附。"""
+    board = TileBoard(align="grid")
+    board.set_devices([make_device("a", "A", on=True)])
+    tile = board._tiles["a"]
+
+    tile.move(203, 117)
+    tile._remember_pos()
+    check("网格对齐吸到 16 的倍数", (tile.x() % 16, tile.y() % 16) == (0, 0))
+    check("吸附后仍在原处附近", abs(tile.x() - 203) <= 8 and abs(tile.y() - 117) <= 8)
+
+    board.set_options(align="edge")
+    tile = board._tiles["a"]
+    area = _screen_area()
+    tile.move(area.left() + 5, area.top() + 7)
+    tile._remember_pos()
+    check("贴边吸附到左上角", (tile.x(), tile.y()) == (area.left(), area.top()))
+
+    board.set_options(align="free")
+    tile.move(area.left() + 5, area.top() + 7)
+    tile._remember_pos()
+    check("自由摆放不吸附", (tile.x(), tile.y()) == (area.left() + 5, area.top() + 7))
+
+
+def test_selection(app: QApplication) -> None:
+    """自选设备：只放挑中的那几台。"""
+    from app.controller import AppController
+    from app.main_window import MainWindow
+
+    controller = AppController()
+    controller.restore_session = lambda: False
+    controller.refresh = lambda: None
+    controller.connect_mqtt = lambda: None
+    controller.load_scenes = lambda: None
+    controller.store = _FakeStore(
+        [make_device("a", "客厅热水器", on=True), make_device("b", "台灯", on=False)]
+    )
+
+    window = MainWindow(controller, start_hidden=True)
+    window._save_settings = lambda: None
+    window._settings["tiles_devices"] = ["b"]
+    window._sync_board_devices()
+    check("自选后只放挑中的设备", window.tile_board.count == 1)
+    check("挑中的确实是那台", "b" in window.tile_board._tiles)
+
+    window._settings.pop("tiles_devices", None)
+    window._sync_board_devices()
+    check("清空自选后恢复默认", window.tile_board.count == 2)
+
+    window.tile_board.close_all()
+    window.close()
+
+
 def test_auto_pos(app: QApplication) -> None:
     """没存过位置的设备要自动排在屏幕内，不能堆到屏幕外。"""
     board = TileBoard()
@@ -304,7 +395,11 @@ def main() -> int:
     test_position(app)
     test_drag(app)
     test_signals(app)
+    test_sizes(app)
+    test_set_options(app)
+    test_snap(app)
     test_auto_pos(app)
+    test_selection(app)
     test_integration(app)
     test_close(app)
 
