@@ -652,6 +652,29 @@ QLabel#MiniCardMeta {
     color: @text_3;
 }
 
+/* ---------------- 桌面磁贴 ---------------- */
+QFrame#DesktopTile {
+    background: @surface;
+    border: 1px solid @card_border;
+    border-radius: 14px;
+}
+QFrame#DesktopTile:hover {
+    background: @surface_3;
+    border-color: @accent;
+}
+QFrame#DesktopTile[offline="true"] {
+    background: @surface_2;
+}
+QLabel#TileName {
+    font-size: 13px;
+    font-weight: 600;
+    color: @text;
+}
+QLabel#TileSummary {
+    font-size: 12px;
+    color: @text_2;
+}
+
 /* ---------------- 滑块 ---------------- */
 QSlider::groove:horizontal {
     height: 4px;

@@ -38,6 +38,7 @@ from .dialogs.settings_dialog import SettingsDialog
 from .tray import TrayController
 from .tray_panel import TrayPanel
 from .widget_board import WidgetBoard
+from .widget_tile import TileBoard
 from .widgets.glyph_icons import make_app_icon
 from .pages.dashboard_page import DashboardPage
 from .pages.login_page import LoginPage
@@ -70,6 +71,7 @@ class MainWindow(QMainWindow):
         self._startup_pending = False
         self._quit_requested = False
         self._board_restored = False      # 启动时只恢复一次挂件
+        self._tiles_restored = False      # 磁贴同理
 
         self.setWindowTitle("华为智慧生活 · PC 控制台")
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
@@ -168,10 +170,17 @@ class MainWindow(QMainWindow):
         # 由主窗口持有引用，避免主窗口最小化时被连带隐藏。
         self.tray_panel = TrayPanel(tray_layout)
         self.board = WidgetBoard(board_state)
+        # 桌面磁贴：每台设备一块独立小窗，和挂件并存、各有各的开关。
+        # 位置按 dev_id 存，换设备顺序不会串位。
+        self.tile_board = TileBoard(self._settings.get("tiles_positions"))
+        self.tile_board.on_power = self._on_power_requested
+        self.tile_board.on_state_changed = self._on_tiles_state_changed
+        self.tile_board.on_dismissed = self._on_tile_dismissed
 
         self.tray.open_panel.connect(self._show_tray_panel)
         self.tray.open_main.connect(self._show_main_window)
         self.tray.open_board.connect(self._show_board)
+        self.tray.open_tiles.connect(self._show_tiles)
         self.tray.open_wall.connect(self._open_camera_wall)
         self.tray.quit_requested.connect(self._quit_app)
 
@@ -229,6 +238,10 @@ class MainWindow(QMainWindow):
 
     def _sync_board_devices(self) -> None:
         self.board.set_devices(self._ordered_devices("board_devices", require_switch=True))
+        # 磁贴只放有开关能力的设备：没有开关的摆一块"点不动的方块"没意义
+        self.tile_board.set_devices(
+            self._ordered_devices("tiles_devices", require_switch=True)
+        )
         # 相机按钮跟着摄像头数量走：一台都没有就藏起来，不制造点开只会报错的入口
         self.board.set_camera_available(bool(self._camera_targets()))
         if self._camera_popup is not None and self._camera_popup.isVisible():
@@ -446,6 +459,49 @@ class MainWindow(QMainWindow):
             "挂件恢复：按上次位置打开 (%s, %s)", state.get("x"), state.get("y")
         )
 
+    # ---- 桌面磁贴 ----
+    def _show_tiles(self) -> None:
+        """托盘「桌面磁贴」：显示 / 隐藏切换。"""
+        self._sync_board_devices()
+        if self.tile_board.visible:
+            self.tile_board.hide_all()
+            self._settings["tiles_visible"] = False
+            self._save_settings()
+            self.toast.show_toast("已隐藏桌面磁贴", "info")
+            return
+
+        if self.tile_board.count == 0:
+            self.toast.show_toast("没有可放的设备（磁贴只放有开关能力的设备）", "warning")
+            return
+        self.tile_board.show_all()
+        self._settings["tiles_visible"] = True
+        self._save_settings()
+        _LOGGER.info("桌面磁贴：已显示 %s 块", self.tile_board.count)
+
+    def _restore_tiles(self) -> None:
+        """启动时按上次的状态恢复磁贴（设备加载完之后调一次）。"""
+        if self._tiles_restored:
+            return
+        self._tiles_restored = True
+        if not bool(self._settings.get("tiles_visible")):
+            return
+        self._show_tiles()
+        _LOGGER.info("桌面磁贴恢复：%s 块", self.tile_board.count)
+
+    def _on_tiles_state_changed(self, state: dict) -> None:
+        self._settings["tiles_positions"] = state
+        self._save_settings()
+
+    def _on_tile_dismissed(self, dev_id: str) -> None:
+        """右键菜单：隐藏一块（dev_id 为空表示隐藏全部）。"""
+        if dev_id:
+            self.tile_board.hide_one(dev_id)
+            return
+        self.tile_board.hide_all()
+        self._settings["tiles_visible"] = False
+        self._save_settings()
+        self.toast.show_toast("已隐藏全部桌面磁贴", "info")
+
     # ---- 自选设备与排序 ----
     def _edit_tray_devices(self) -> None:
         from .tray_panel import MAX_VISIBLE_DEVICES
@@ -649,6 +705,7 @@ class MainWindow(QMainWindow):
         self._sync_board_devices()
         # 设备就绪后恢复上次的挂件（位置也一并恢复）
         self._restore_board()
+        self._restore_tiles()
 
         # 首次加载完成后应用「启动时默认分类」
         if self._startup_pending:
@@ -669,6 +726,7 @@ class MainWindow(QMainWindow):
         if device is not None:
             self.tray_panel.refresh_device(device)
             self.board.refresh_device(device)
+            self.tile_board.refresh(device)
         dialog = self._device_dialog
         if dialog is not None and dialog.isVisible() and dialog.dev_id == dev_id:
             device = self.controller.store.get(dev_id)
@@ -1114,6 +1172,8 @@ class MainWindow(QMainWindow):
         # 拖完立刻关程序的话最后一次位置会被吞掉，下次启动就回到旧位置
         self.board.flush_state()
         self.board.hide()
+        # 磁贴是独立顶层窗口，不关掉的话主窗口退出后它们还挂在桌面上
+        self.tile_board.close_all()
         if self._camera_wall is not None:
             # 每路一个解码线程，退出前必须停掉，否则进程会拖着不退
             self._camera_wall.stop_all()
