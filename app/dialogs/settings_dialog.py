@@ -80,6 +80,8 @@ class SettingsDialog(QDialog):
     tile_size_changed = Signal(str)
     tile_align_changed = Signal(str)
     tile_summary_changed = Signal(bool)
+    tile_glow_changed = Signal(str)
+    tile_wallpaper_changed = Signal(bool)
     board_restore_changed = Signal(bool)
     autostart_changed = Signal(bool)
     update_ready = Signal(str)          # 新版本目录，由主窗口接手替换
@@ -100,6 +102,8 @@ class SettingsDialog(QDialog):
         tile_size: str = "standard",
         tile_align: str = "free",
         tile_show_summary: bool = True,
+        tile_glow: str = "balanced",
+        tile_wallpaper: bool = True,
         board_restore: bool = True,
         autostart_enabled: bool | None = None,
         parent: QWidget | None = None,
@@ -125,6 +129,8 @@ class SettingsDialog(QDialog):
         self._tile_size = tile_size
         self._tile_align = tile_align
         self._tile_show_summary = bool(tile_show_summary)
+        self._tile_glow = tile_glow
+        self._tile_wallpaper = bool(tile_wallpaper)
         self._board_restore = bool(board_restore)
         # None = 问注册表要真实状态（设置项本身可能存在注册表里、不一定写过 settings）
         self._autostart_enabled = (
@@ -562,8 +568,17 @@ class SettingsDialog(QDialog):
         self._tile_size_combo.setMinimumWidth(88)
         self._fill_combo(
             self._tile_size_combo,
-            [("紧凑", "compact"), ("标准", "standard"), ("大", "large")],
+            [
+                ("紧凑", "compact"),
+                ("标准", "standard"),
+                ("大", "large"),
+                ("卡片", "card"),
+            ],
             self._tile_size,
+        )
+        self._tile_size_combo.setToolTip(
+            "卡片尺寸会显示温度加减和模式切换（设备支持时），\n"
+            "其它尺寸只放图标、名称、状态和电源键"
         )
         self._tile_size_combo.currentIndexChanged.connect(self._on_tile_size)
 
@@ -593,11 +608,47 @@ class SettingsDialog(QDialog):
         row.addWidget(self._tile_align_combo, 1)
         layout.addLayout(row)
 
+        self._tile_glow_combo = QComboBox()
+        self._tile_glow_combo.setMinimumWidth(96)
+        self._fill_combo(
+            self._tile_glow_combo,
+            [
+                ("关闭", "off"),
+                ("弱", "weak"),
+                ("均衡（默认）", "balanced"),
+                ("强", "strong"),
+            ],
+            self._tile_glow,
+        )
+        self._tile_glow_combo.setToolTip(
+            "卡片背后那层虹彩光的强度。尺寸越小的磁贴越不适合开强"
+        )
+        self._tile_glow_combo.currentIndexChanged.connect(self._on_tile_glow)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+        third = QLabel("沉浸光感")
+        third.setObjectName("Body")
+        row2.addWidget(third, 0)
+        row2.addWidget(self._tile_glow_combo, 1)
+        row2.addStretch(1)
+        layout.addLayout(row2)
+
         self._tile_summary_box = QCheckBox("磁贴上显示状态文字（温度、亮度这类读数）")
         self._tile_summary_box.setChecked(self._tile_show_summary)
         self._tile_summary_box.setToolTip("紧凑尺寸下会自动省掉这一行，避免挤在一起")
         self._tile_summary_box.toggled.connect(self.tile_summary_changed.emit)
         layout.addWidget(self._tile_summary_box)
+
+        self._tile_wallpaper_box = QCheckBox("钉在桌面壁纸层（桌面图标那一层）")
+        self._tile_wallpaper_box.setChecked(self._tile_wallpaper)
+        self._tile_wallpaper_box.setToolTip(
+            "开启后磁贴是桌面的一部分：其它窗口会正常盖住它，按 Win+D 显示桌面时它还在。\n"
+            "关闭则当作普通小窗口（Win+D 会一起收走）。\n"
+            "壁纸层不支持半透明，所以四角会有极轻微的锯齿。"
+        )
+        self._tile_wallpaper_box.toggled.connect(self.tile_wallpaper_changed.emit)
+        layout.addWidget(self._tile_wallpaper_box)
 
     @staticmethod
     def _fill_combo(combo: QComboBox, options: list[tuple[str, str]], current: str) -> None:
@@ -619,6 +670,12 @@ class SettingsDialog(QDialog):
         if key:
             self._tile_align = str(key)
             self.tile_align_changed.emit(self._tile_align)
+
+    def _on_tile_glow(self, index: int) -> None:
+        key = self._tile_glow_combo.itemData(index)
+        if key:
+            self._tile_glow = str(key)
+            self.tile_glow_changed.emit(self._tile_glow)
 
     # ---- 桌面挂件 ----
     def _build_board(self, layout: QVBoxLayout) -> None:

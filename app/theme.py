@@ -652,18 +652,12 @@ QLabel#MiniCardMeta {
     color: @text_3;
 }
 
-/* ---------------- 桌面磁贴 ---------------- */
-QFrame#DesktopTile {
-    background: @surface;
-    border: 1px solid @card_border;
-    border-radius: 14px;
-}
-QFrame#DesktopTile:hover {
-    background: @surface_3;
-    border-color: @accent;
-}
-QFrame#DesktopTile[offline="true"] {
-    background: @surface_2;
+/* ---------------- 桌面磁贴 ----------------
+   卡片的底色、圆角、边框和光晕都在 DeviceTile.paintEvent 里画（要配合
+   "沉浸光感"做渐变），所以这里只让内容容器保持透明。 */
+QFrame#TileBody {
+    background: transparent;
+    border: none;
 }
 QLabel#TileName {
     font-size: 13px;
@@ -673,6 +667,63 @@ QLabel#TileName {
 QLabel#TileSummary {
     font-size: 12px;
     color: @text_2;
+}
+QLabel#TileSubtitle {
+    font-size: 12px;
+    color: @text_2;
+}
+QLabel#StepperLabel {
+    font-size: 12px;
+    color: @text_2;
+}
+QLabel#StepperValue {
+    font-size: 17px;
+    font-weight: 600;
+    color: @text;
+}
+QWidget#TileStepper {
+    background: @panel_bg;
+    border-radius: 19px;
+}
+QPushButton#StepperButton {
+    background: rgba(255, 255, 255, 0.10);
+    border: none;
+    border-radius: 15px;
+    color: @text;
+    font-size: 18px;
+    font-weight: 700;
+    /* 必须显式清零：通用 QPushButton 的 7px/14px 内边距会把 30px 的圆按钮
+       挤得只剩中间一窄条，文字就被裁成一个点/一根竖线 */
+    padding: 0;
+}
+QPushButton#StepperButton:hover {
+    background: @accent;
+    color: @on_accent;
+}
+QPushButton#StepperButton:pressed {
+    background: @accent_hover;
+}
+QPushButton#StepperButton:disabled {
+    background: transparent;
+    color: @text_3;
+}
+QPushButton#TileChip {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid transparent;
+    border-radius: 16px;
+    padding: 0;
+    min-height: 32px;
+    font-size: 12px;
+    color: @text_2;
+}
+QPushButton#TileChip:hover {
+    border-color: @accent_line;
+    color: @text;
+}
+QPushButton#TileChip:checked {
+    background: @accent;
+    color: @on_accent;
+    font-weight: 600;
 }
 
 /* ---------------- 滑块 ---------------- */

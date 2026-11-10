@@ -147,6 +147,37 @@ def main() -> int:
     check("低于下限被夹住", volume_dialog._volume_slider.value() == 30)
     volume_dialog.close()
 
+    # ---- 5c. 磁贴的个性化选项 ----
+    tile_dialog = SettingsDialog(
+        "138****0000", [("h1", "我的家")], "all",
+        tile_size="card", tile_align="edge", tile_glow="strong",
+        tile_wallpaper=False, autostart_enabled=False,
+    )
+    check("尺寸下拉有「卡片」档",
+          [tile_dialog._tile_size_combo.itemData(i) for i in range(tile_dialog._tile_size_combo.count())]
+          == ["compact", "standard", "large", "card"])
+    check("尺寸按设置初始化", tile_dialog._tile_size_combo.currentData() == "card")
+    check("对齐按设置初始化", tile_dialog._tile_align_combo.currentData() == "edge")
+    check("光感按设置初始化", tile_dialog._tile_glow_combo.currentData() == "strong")
+    check("壁纸层按设置初始化", tile_dialog._tile_wallpaper_box.isChecked() is False)
+    check("光感有四档（含关闭）",
+          [tile_dialog._tile_glow_combo.itemData(i) for i in range(tile_dialog._tile_glow_combo.count())]
+          == ["off", "weak", "balanced", "strong"])
+
+    glow_picks: list[str] = []
+    wallpaper_picks: list[bool] = []
+    tile_dialog.tile_glow_changed.connect(glow_picks.append)
+    tile_dialog.tile_wallpaper_changed.connect(wallpaper_picks.append)
+
+    tile_dialog._tile_glow_combo.setCurrentIndex(0)
+    app.processEvents()
+    check("换光感档位发出信号", glow_picks == ["off"])
+
+    tile_dialog._tile_wallpaper_box.setChecked(True)
+    app.processEvents()
+    check("壁纸层开关发出信号", wallpaper_picks == [True])
+    tile_dialog.close()
+
     # ---- 6. 隐藏启动（--tray）但恢复不出会话时，窗口必须自己出现 ----
     # 否则开机后程序在跑、却停在隐藏的登录页上，用户什么都看不到
     from PySide6.QtTest import QTest
@@ -215,6 +246,17 @@ def main() -> int:
     check("传超上限也夹到 MAX_VOLUME",
           abs(hidden._settings.get("audio_volume", 0) - audio_module.MAX_VOLUME) < 1e-6)
     hidden._set_audio_volume(1.0)      # 复位，别把用户的运行态留在 3 倍
+
+    # ---- 8b. 磁贴的光感与壁纸层：写设置 + 应用到 board ----
+    hidden._set_tile_glow("weak")
+    check("光感写进设置", hidden._settings.get("tiles_glow") == "weak")
+    check("光感应用到磁贴板", hidden.tile_board.glow == "weak")
+
+    hidden._set_tile_wallpaper(False)
+    check("壁纸层写进设置", hidden._settings.get("tiles_wallpaper") is False)
+    check("壁纸层应用到磁贴板", hidden.tile_board.wallpaper_mode is False)
+    hidden._set_tile_wallpaper(True)
+    hidden._set_tile_glow("balanced")
 
     hidden.close()
 

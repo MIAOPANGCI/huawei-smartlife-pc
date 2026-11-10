@@ -38,7 +38,7 @@ from .dialogs.settings_dialog import SettingsDialog
 from .tray import TrayController
 from .tray_panel import TrayPanel
 from .widget_board import WidgetBoard
-from .widget_tile import MAX_TILES, TileBoard
+from .widget_tile import DEFAULT_GLOW, MAX_TILES, TileBoard
 from .widgets.glyph_icons import make_app_icon
 from .pages.dashboard_page import DashboardPage
 from .pages.login_page import LoginPage
@@ -176,6 +176,8 @@ class MainWindow(QMainWindow):
             self._settings.get("tiles_positions"), **self._tile_options()
         )
         self.tile_board.on_power = self._on_power_requested
+        self.tile_board.on_command = self._on_tile_command
+        self.tile_board.on_detail = self._open_device
         self.tile_board.on_state_changed = self._on_tiles_state_changed
         self.tile_board.on_dismissed = self._on_tile_dismissed
         self.tile_board.on_settings = self._edit_tiles_devices
@@ -498,6 +500,8 @@ class MainWindow(QMainWindow):
             "size_key": str(self._settings.get("tiles_size", "standard")),
             "align": str(self._settings.get("tiles_align", "free")),
             "show_summary": bool(self._settings.get("tiles_summary", True)),
+            "glow": str(self._settings.get("tiles_glow", DEFAULT_GLOW)),
+            "wallpaper_mode": bool(self._settings.get("tiles_wallpaper", True)),
         }
 
     def _set_tile_option(self, key: str, value) -> None:
@@ -513,6 +517,17 @@ class MainWindow(QMainWindow):
 
     def _set_tile_summary(self, value: bool) -> None:
         self._set_tile_option("tiles_summary", bool(value))
+
+    def _set_tile_glow(self, value: str) -> None:
+        self._set_tile_option("tiles_glow", str(value))
+
+    def _set_tile_wallpaper(self, value: bool) -> None:
+        self._set_tile_option("tiles_wallpaper", bool(value))
+        _LOGGER.info("桌面磁贴：壁纸层 %s", "开启" if value else "关闭")
+
+    def _on_tile_command(self, dev_id: str, sid: str, data: dict) -> None:
+        """卡片上的加减温度 / 切模式：直接下发，状态等设备回传。"""
+        self.controller.send_command(dev_id, sid, data)
 
     def _edit_tiles_devices(self) -> None:
         """磁贴上放哪几台设备、什么顺序。"""
@@ -1029,6 +1044,8 @@ class MainWindow(QMainWindow):
             tile_size=str(self._settings.get("tiles_size", "standard")),
             tile_align=str(self._settings.get("tiles_align", "free")),
             tile_show_summary=bool(self._settings.get("tiles_summary", True)),
+            tile_glow=str(self._settings.get("tiles_glow", DEFAULT_GLOW)),
+            tile_wallpaper=bool(self._settings.get("tiles_wallpaper", True)),
             board_restore=bool(self._settings.get("board_restore", True)),
             parent=self,
         )
@@ -1044,6 +1061,8 @@ class MainWindow(QMainWindow):
         dialog.tile_size_changed.connect(self._set_tile_size)
         dialog.tile_align_changed.connect(self._set_tile_align)
         dialog.tile_summary_changed.connect(self._set_tile_summary)
+        dialog.tile_glow_changed.connect(self._set_tile_glow)
+        dialog.tile_wallpaper_changed.connect(self._set_tile_wallpaper)
         dialog.board_restore_changed.connect(self._set_board_restore)
         dialog.update_ready.connect(self._on_update_ready)
         dialog.autostart_changed.connect(

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app.theme import set_theme  # noqa: E402
 from app.widget_tile import (  # noqa: E402
+    GLOW_PAD,
     TILE_GAP,
     TILE_HEIGHT,
     TILE_SIZES,
@@ -78,8 +79,8 @@ def test_build(app: QApplication) -> None:
     tile = board._tiles["a"]
     check("磁贴尺寸固定", (tile.width(), tile.height()) == (TILE_WIDTH, TILE_HEIGHT))
     check("显示设备名", tile._name.text() == "客厅热水器")
-    check("摘要带温度", "48" in tile._summary.text())
-    check("离线设备显示离线", board._tiles["c"]._summary.text() == "离线")
+    check("摘要带温度", "48" in tile._summary.full_text)
+    check("离线设备显示离线", board._tiles["c"]._summary.full_text == "离线")
     check("离线设备打了标记", board._tiles["c"]._body.property("offline") == "true")
 
     plain = DeviceTile(make_device("x", "无开关设备", with_switch=False))
@@ -281,6 +282,140 @@ def test_integration(app: QApplication) -> None:
     window.close()
 
 
+def make_ac(dev_id: str = "ac", name: str = "二楼空调") -> Device:
+    """空调：带可写的设定温度 + 字符串模式枚举，卡片上会出控件。"""
+    return Device(
+        home_id="h",
+        dev_id=dev_id,
+        name=name,
+        room_name="卧室",
+        online=True,
+        services={
+            "ac": ServiceState(
+                sid="ac",
+                service_type="ac",
+                data={
+                    "on": True,
+                    "targettemp": 27,
+                    "mode": "auto",
+                    "currenttemperature": 29,
+                },
+            )
+        },
+    )
+
+
+def test_card_controls(app: QApplication) -> None:
+    """卡片尺寸上的控件：温度加减、模式切换，都是发绝对命令。"""
+    tile = DeviceTile(make_ac(), size_key="card")
+    check("卡片上出现温度条", tile._stepper is not None and not tile._stepper.isHidden())
+    check("温度条显示当前设定值", tile._stepper._value.text() == "27 °C")
+    check("到上限时加号禁用", tile._stepper._plus.isEnabled() is True)
+
+    commands: list[tuple[str, str, dict]] = []
+    tile.command_requested.connect(lambda *args: commands.append(args))
+    tile._stepper._plus.click()
+    app.processEvents()
+    check("点加号发出 +1 的命令", commands and commands[-1][2] == {"targettemp": 28.0})
+    check("卡片上的数字同步变化", tile._stepper._value.text() == "28 °C")
+
+    tile._stepper._minus.click()
+    app.processEvents()
+    check("点减号回到 27", commands[-1][2] == {"targettemp": 27.0})
+
+    # 模式：当前模式排第一并高亮，其余是其它模式 + 更多
+    chips = tile._chips._buttons
+    labels = [button.text() for button in chips]
+    check("模式块按当前模式排在前面", labels[0] == "自动")
+    check("当前模式高亮", chips[0].isChecked() is True)
+    check("最后一个是「更多」", labels[-1] == "更多")
+
+    chips[1].click()
+    app.processEvents()
+    check("点模式块发出模式命令", commands[-1][2] == {"mode": "cool"})
+
+    # 不支持的设备：只留「更多」，不硬塞控件
+    plain = DeviceTile(make_device("p", "台灯", on=True), size_key="card")
+    check("没有温度就不显示温度条", plain._stepper.isHidden() is True)
+    check("没有模式时只剩「更多」", [b.text() for b in plain._chips._buttons] == ["更多"])
+
+    # 离线时控件藏起来，避免对着离线设备发命令
+    offline = DeviceTile(
+        Device(home_id="h", dev_id="o", name="空调", online=False,
+               services=make_ac().services),
+        size_key="card",
+    )
+    check("离线设备不显示温度条", offline._stepper.isHidden() is True)
+    tile.close(); plain.close(); offline.close()
+
+
+def test_glow(app: QApplication) -> None:
+    """沉浸光感：四档都在，改档不重建窗口。"""
+    board = TileBoard()
+    board.set_devices([make_device("a", "A", on=True)])
+    tile = board._tiles["a"]
+    check("默认是均衡", tile.glow == "balanced")
+    check("默认光感强度在 0~1 之间", 0 < tile.glow_strength <= 1)
+
+    board.set_options(glow="off")
+    check("改档不重建窗口", board._tiles["a"] is tile)
+    check("关闭后强度为 0", tile.glow_strength == 0.0)
+
+    board.set_options(glow="strong")
+    check("强档强度为 1", tile.glow_strength == 1.0)
+
+    board.set_options(glow="乱填")
+    check("非法档位被忽略", board.glow == "strong")
+    board.close_all()
+
+
+def test_wallpaper(app: QApplication) -> None:
+    """壁纸层：挂不上要退化成普通窗口，不能变成一个看不见的窗口。"""
+    from PySide6.QtCore import Qt as _Qt
+
+    import app.widget_tile as tile_module
+
+    original = tile_module.wallpaper.attach
+    attempts: list[int] = []
+
+    def fake_fail(hwnd: int):
+        attempts.append(hwnd)
+        return None
+
+    def fake_ok(hwnd: int):
+        attempts.append(hwnd)
+        return (0, 0)
+
+    try:
+        tile_module.wallpaper.attach = fake_fail
+        tile = DeviceTile(make_device("a", "A", on=True), wallpaper_mode=True)
+        check("壁纸模式不开半透明（子窗口不支持分层）",
+              tile.testAttribute(_Qt.WA_TranslucentBackground) is False)
+        tile.show_at(QPoint(300, 300))
+        app.processEvents()
+        check("挂不上时不认为自己在壁纸层", tile.wallpaper_active is False)
+        check("挂不上后关掉重试（不反复折腾自己）", tile._wallpaper_wanted is False)
+        tile.hide()
+
+        tile_module.wallpaper.attach = fake_ok
+        ok_tile = DeviceTile(make_device("b", "B", on=True), wallpaper_mode=True)
+        ok_tile.show_at(QPoint(300, 300))
+        app.processEvents()
+        check("挂上后标记为壁纸层", ok_tile.wallpaper_active is True)
+        check("挂上后套上圆角遮罩", ok_tile.mask().isEmpty() is False)
+        check("挂上后坐标换算用父窗口偏移", ok_tile._screen_pos() == ok_tile.pos() + ok_tile._offset)
+        ok_tile.hide()
+
+        # 非壁纸模式：保持半透明、不留遮罩
+        normal = DeviceTile(make_device("c", "C", on=True), wallpaper_mode=False)
+        check("普通模式仍是半透明窗口",
+              normal.testAttribute(_Qt.WA_TranslucentBackground) is True)
+        check("普通模式没有遮罩", normal.mask().isEmpty() is True)
+        normal.close()
+    finally:
+        tile_module.wallpaper.attach = original
+
+
 def test_window_behaviour(app: QApplication) -> None:
     """磁贴是"桌面上的方块"：不置顶、不进任务栏，但内容区不能吞掉子控件的点击。"""
     board = TileBoard()
@@ -355,13 +490,16 @@ def test_snap(app: QApplication) -> None:
     tile = board._tiles["a"]
 
     area = _screen_area()
-    step_x = tile.width() + TILE_GAP
-    step_y = tile.height() + TILE_GAP
+    step_x, step_y = tile.grid_step()
     tile.move(area.left() + 203, area.top() + 117)
     tile._remember_pos()
+    offset = GLOW_PAD
     check(
         "网格对齐落在网格线上",
-        ((tile.x() - area.left()) % step_x, (tile.y() - area.top()) % step_y) == (0, 0),
+        (
+            (tile.x() - area.left() - offset) % step_x,
+            (tile.y() - area.top() - offset) % step_y,
+        ) == (0, 0),
     )
     check("吸附后仍在原处附近", abs(tile.x() - area.left() - 203) <= step_x // 2)
 
@@ -433,6 +571,9 @@ def main() -> int:
     test_drag(app)
     test_signals(app)
     test_window_behaviour(app)
+    test_card_controls(app)
+    test_glow(app)
+    test_wallpaper(app)
     test_sizes(app)
     test_set_options(app)
     test_snap(app)

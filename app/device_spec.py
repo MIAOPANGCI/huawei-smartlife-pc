@@ -1110,3 +1110,106 @@ def format_number(value: Any) -> str:
         text = f"{value:,.2f}".rstrip("0").rstrip(".")
         return text or "0"
     return str(value)
+
+# ---------------------------------------------------------------------------
+# 桌面卡片用到的两个控件：温度加减、模式切换
+# ---------------------------------------------------------------------------
+# 只认"看起来是设定值"的键。``temperature`` 在有些机型上是当前温度（热水器），
+# 拿它下发会把只读遥测当设定值写进去，所以只有在带范围元数据时才接受它。
+_TEMP_SET_KEYS: tuple[str, ...] = (
+    "targettemp",
+    "targettemperature",
+    "settemp",
+    "settemperature",
+    "tmpvalue",
+    "temp",
+)
+_TEMP_LOOSE_KEYS: tuple[str, ...] = ("temperature",)
+
+# 空调类产品的常见模式：协议里是字符串枚举
+MODE_LABELS: tuple[tuple[str, str], ...] = (
+    ("auto", "自动"),
+    ("cool", "制冷"),
+    ("heat", "制热"),
+    ("dry", "除湿"),
+    ("fan", "送风"),
+)
+_MODE_KEYS: tuple[str, ...] = ("mode", "workmode", "acmode", "pattern")
+
+
+def find_temperature_control(
+    device: Device,
+) -> tuple[str, str, float, float, float] | None:
+    """找出"可以加减的温度设定值"。
+
+    返回 ``(sid, key, 当前值, 最小, 最大, 步长)``；找不到返回 ``None``。
+    范围优先用设备给的元数据，否则按摄氏度常识给 16–30。
+    """
+    for sid, svc in device.services.items():
+        data = svc.data or {}
+        lower = {str(k).lower(): k for k in data}
+        for index, want in enumerate(_TEMP_SET_KEYS):
+            key = lower.get(want)
+            if key is None:
+                continue
+            value = data[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if not 5 <= float(value) <= 60:
+                continue
+            return _temp_spec(sid, key, value, data, want)
+        # 没有明确的设定值键时，只有在带范围元数据时才敢用 temperature
+        for want in _TEMP_LOOSE_KEYS:
+            key = lower.get(want)
+            if key is None:
+                continue
+            value = data[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if not _has_range_meta(data) or not 5 <= float(value) <= 60:
+                continue
+            return _temp_spec(sid, key, value, data, want)
+    return None
+
+
+def _temp_spec(
+    sid: str, key: str, value: float, data: Mapping[str, Any], want: str
+) -> tuple[str, str, float, float, float]:
+    is_int = isinstance(value, int)
+    if _has_range_meta(data):
+        minimum, maximum, step, _is_int = infer_range(data, value)
+        if maximum - minimum < 1:      # 元数据不靠谱时退回常识范围
+            minimum, maximum, step = 16.0, 30.0, 1.0
+    else:
+        minimum, maximum, step = 16.0, 30.0, 1.0
+    step = max(1.0 if is_int else 0.5, step)
+    return (sid, str(key), float(value), minimum, maximum, step)
+
+
+def find_mode_control(
+    device: Device,
+) -> tuple[str, str, str, list[tuple[str, str]]] | None:
+    """找出可切换的运行模式。
+
+    只在"当前值是能认出来的字符串枚举"时才返回——协议里模式常是整数编号
+    （1=自动 2=制冷…），编号映射因厂商而异，猜一个下发出去就是把设备设成别的
+    模式。认不出来就让用户去设备详情里点，卡片上只留「更多」。
+    """
+    labels = dict(MODE_LABELS)
+    for sid, svc in device.services.items():
+        data = svc.data or {}
+        lower = {str(k).lower(): k for k in data}
+        for want in _MODE_KEYS:
+            key = lower.get(want)
+            if key is None:
+                continue
+            value = data[key]
+            if not isinstance(value, str):
+                continue
+            current = value.strip().lower()
+            if current not in labels:
+                continue
+            options = [(name, labels[name]) for name, _ in MODE_LABELS]
+            return (sid, str(key), current, options)
+    return None
+
